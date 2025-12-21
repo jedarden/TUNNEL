@@ -1,0 +1,149 @@
+# TUNNEL - Terminal Unified Network Node Encrypted Link
+# Default Configuration File
+# Version: 1.0.0
+
+version: "1.0.0"
+
+# General Settings
+settings:
+  # Default authentication method to use
+  default_method: ssh-key
+
+  # Automatically reconnect on connection loss
+  auto_reconnect: true
+
+  # Logging level: debug, info, warn, error
+  log_level: info
+
+  # UI theme: default, dark, light, nord, dracula
+  theme: default
+
+# Credential Store Configuration
+credentials:
+  # Store type: keyring (system keyring), file (encrypted file), env (environment variables)
+  store: keyring
+
+  # Base directory for file-based credential store
+  # Only used when store is set to "file"
+  base_dir: ~/.config/tunnel/credentials
+
+  # Passphrase for file encryption (leave empty to be prompted)
+  # Only used when store is set to "file"
+  passphrase: ""
+
+# Authentication Methods Configuration
+# Each method can be enabled/disabled and has a priority for failover
+methods:
+  # SSH Public Key Authentication
+  ssh-key:
+    enabled: true
+    priority: 100
+    auth_key_ref: ""
+    extra_args: []
+    settings: {}
+
+  # Password Authentication
+  password:
+    enabled: true
+    priority: 90
+    auth_key_ref: tunnel:ssh-password
+    extra_args: []
+    settings: {}
+
+  # FIDO2/WebAuthn Hardware Token
+  fido2:
+    enabled: false
+    priority: 80
+    auth_key_ref: ""
+    extra_args: []
+    settings:
+      require_user_verification: "true"
+
+  # TOTP (Time-based One-Time Password)
+  totp:
+    enabled: false
+    priority: 70
+    auth_key_ref: tunnel:totp-secret
+    extra_args: []
+    settings:
+      window: "1"      # Number of time windows to check (past/future)
+      period: "30"     # Time period in seconds
+
+  # OAuth 2.0 (GitHub, Google, etc.)
+  oauth:
+    enabled: false
+    priority: 60
+    auth_key_ref: tunnel:oauth-token
+    extra_args: []
+    settings:
+      provider: github
+      client_id: ""
+      redirect_uri: http://localhost:8080/callback
+
+  # WireGuard VPN
+  wireguard:
+    enabled: false
+    priority: 50
+    auth_key_ref: tunnel:wg-private-key
+    extra_args: []
+    settings:
+      endpoint: ""
+      allowed_ips: 0.0.0.0/0
+
+  # Tailscale
+  tailscale:
+    enabled: false
+    priority: 40
+    auth_key_ref: tunnel:tailscale-key
+    extra_args: []
+    settings:
+      control_url: https://controlplane.tailscale.com
+
+# SSH Server Configuration
+ssh:
+  # SSH server port
+  port: 2222
+
+  # Path to SSH host key (will be generated if not exists)
+  host_key_path: ~/.config/tunnel/ssh_host_key
+
+  # Path to authorized_keys file
+  authorized_keys: ~/.ssh/authorized_keys
+
+  # List of allowed users (empty = all users allowed)
+  allowed_users: []
+
+  # Maximum concurrent sessions
+  max_sessions: 10
+
+  # Idle timeout in seconds (0 = no timeout)
+  idle_timeout: 300
+
+  # Keep-alive interval in seconds
+  keep_alive: 60
+
+  # Allow TCP forwarding
+  allow_tcp_forwarding: true
+
+  # Allow agent forwarding
+  allow_agent_forwarding: true
+
+# Monitoring and Audit Configuration
+monitoring:
+  # Enable monitoring
+  enabled: true
+
+  # Audit log file path
+  audit_log: ~/.config/tunnel/audit.log
+
+  # Send logs to syslog
+  syslog: false
+
+  # Syslog server (empty = local syslog)
+  syslog_server: ""
+
+  # Enable Prometheus metrics endpoint
+  metrics_enabled: false
+
+  # Metrics HTTP server port
+  metrics_port: 9090

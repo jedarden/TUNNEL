@@ -1,0 +1,235 @@
+# GoReleaser configuration for TUNNEL
+# Documentation: https://goreleaser.com
+
+project_name: tunnel
+
+before:
+  hooks:
+    # Ensure dependencies are up to date
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: tunnel
+    main: ./cmd/tunnel
+    binary: tunnel
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "6"
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm64
+      - goos: windows
+        goarch: arm
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.BuildDate={{.Date}}
+      - -X main.GitCommit={{.Commit}}
+      - -X main.GoVersion={{.Env.GOVERSION}}
+
+archives:
+  - id: tunnel
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - docs/*
+      - completions/*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - 'README'
+      - 'typo'
+  groups:
+    - title: 'Features'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance Improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: 'Refactors'
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: 'Dependencies'
+      regexp: '^.*?build\(deps\)!?:.+$'
+      order: 4
+    - title: 'Other'
+      order: 999
+
+# Linux packages
+nfpms:
+  - id: tunnel
+    package_name: tunnel
+    vendor: Arden One
+    homepage: https://github.com/jedarden/tunnel
+    maintainer: Jed Arden <jed@ardenone.com>
+    description: |
+      Terminal Unified Network Node Encrypted Link
+      A TUI application for managing SSH access through various tunnel providers.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    contents:
+      - src: completions/tunnel.bash
+        dst: /usr/share/bash-completion/completions/tunnel
+        file_info:
+          mode: 0644
+      - src: completions/tunnel.zsh
+        dst: /usr/share/zsh/site-functions/_tunnel
+        file_info:
+          mode: 0644
+      - src: completions/tunnel.fish
+        dst: /usr/share/fish/vendor_completions.d/tunnel.fish
+        file_info:
+          mode: 0644
+
+# Homebrew tap
+brews:
+  - name: tunnel
+    repository:
+      owner: jedarden
+      name: homebrew-tap
+    folder: Formula
+    homepage: https://github.com/jedarden/tunnel
+    description: Terminal Unified Network Node Encrypted Link
+    license: MIT
+    install: |
+      bin.install "tunnel"
+      bash_completion.install "completions/tunnel.bash" => "tunnel"
+      zsh_completion.install "completions/tunnel.zsh" => "_tunnel"
+      fish_completion.install "completions/tunnel.fish"
+    test: |
+      system "#{bin}/tunnel version"
+
+# Snapcraft
+snapcrafts:
+  - id: tunnel
+    name: tunnel
+    summary: SSH tunnel management TUI
+    description: |
+      TUNNEL is a Terminal Unified Network Node Encrypted Link tool
+      for managing SSH access through various tunnel providers including
+      Cloudflare Tunnel, ngrok, Tailscale, bore, and localhost.run.
+    grade: stable
+    confinement: classic
+    publish: false
+    license: MIT
+
+# Docker images
+dockers:
+  - image_templates:
+      - "ghcr.io/jedarden/tunnel:{{ .Version }}-amd64"
+      - "ghcr.io/jedarden/tunnel:latest-amd64"
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
+  - image_templates:
+      - "ghcr.io/jedarden/tunnel:{{ .Version }}-arm64"
+      - "ghcr.io/jedarden/tunnel:latest-arm64"
+    use: buildx
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
+docker_manifests:
+  - name_template: ghcr.io/jedarden/tunnel:{{ .Version }}
+    image_templates:
+      - ghcr.io/jedarden/tunnel:{{ .Version }}-amd64
+      - ghcr.io/jedarden/tunnel:{{ .Version }}-arm64
+
+  - name_template: ghcr.io/jedarden/tunnel:latest
+    image_templates:
+      - ghcr.io/jedarden/tunnel:latest-amd64
+      - ghcr.io/jedarden/tunnel:latest-arm64
+
+# Release settings
+release:
+  github:
+    owner: jedarden
+    name: tunnel
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## TUNNEL {{ .Version }}
+
+    Terminal Unified Network Node Encrypted Link
+
+    ### Installation
+
+    #### Binary Download
+    Download the appropriate binary for your system from the assets below.
+
+    #### Package Managers
+    ```bash
+    # Homebrew (macOS/Linux)
+    brew install jedarden/tap/tunnel
+
+    # Snap
+    snap install tunnel --classic
+
+    # Debian/Ubuntu
+    wget https://github.com/jedarden/tunnel/releases/download/{{ .Version }}/tunnel_{{ .Version }}_Linux_x86_64.deb
+    sudo dpkg -i tunnel_{{ .Version }}_Linux_x86_64.deb
+    ```
+
+    ### Changes
+  footer: |
+    **Full Changelog**: https://github.com/jedarden/tunnel/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Announce
+announce:
+  skip: true
