@@ -30,7 +30,8 @@ type WizardField struct {
 	Value       string
 	Placeholder string
 	Required    bool
-	Secret      bool // Hide input for passwords/tokens
+	Secret      bool   // Hide input for passwords/tokens
+	Help        string // Contextual help explaining where to find this value
 }
 
 // Wizard is the connection configuration wizard
@@ -51,6 +52,7 @@ type Wizard struct {
 	completed       bool
 	installing      bool
 	installStatus   string
+	helpText        string // Provider-specific help text shown at the top
 }
 
 // WizardCompleteMsg is sent when the wizard completes
@@ -115,39 +117,152 @@ func (w *Wizard) setupFields() {
 
 	switch providerName {
 	case "tailscale":
+		w.helpText = "Tailscale creates a secure mesh VPN. Get your auth key from the Tailscale admin console."
 		w.fields = []WizardField{
-			{Name: "auth_key", Label: "Auth Key", Placeholder: "tskey-...", Required: false, Secret: true},
-			{Name: "hostname", Label: "Hostname", Placeholder: "my-device", Required: false},
-			{Name: "accept_routes", Label: "Accept Routes", Value: "yes", Placeholder: "yes/no", Required: false},
+			{
+				Name:        "auth_key",
+				Label:       "Auth Key",
+				Placeholder: "tskey-...",
+				Required:    false,
+				Secret:      true,
+				Help:        "Get from: Tailscale Admin → Settings → Keys → Generate auth key",
+			},
+			{
+				Name:        "hostname",
+				Label:       "Hostname",
+				Placeholder: "my-device",
+				Required:    false,
+				Help:        "Custom name for this device in your Tailscale network",
+			},
+			{
+				Name:        "accept_routes",
+				Label:       "Accept Routes",
+				Value:       "yes",
+				Placeholder: "yes/no",
+				Required:    false,
+				Help:        "Accept subnet routes advertised by other nodes",
+			},
 		}
+
 	case "wireguard":
+		w.helpText = "WireGuard requires a configuration file. Generate one from your VPN provider or create manually."
 		w.fields = []WizardField{
-			{Name: "interface", Label: "Interface Name", Value: "wg0", Placeholder: "wg0", Required: true},
-			{Name: "config_file", Label: "Config File Path", Placeholder: "/etc/wireguard/wg0.conf", Required: true},
+			{
+				Name:        "interface",
+				Label:       "Interface Name",
+				Value:       "wg0",
+				Placeholder: "wg0",
+				Required:    true,
+				Help:        "Network interface name (usually wg0, wg1, etc.)",
+			},
+			{
+				Name:        "config_file",
+				Label:       "Config File Path",
+				Placeholder: "/etc/wireguard/wg0.conf",
+				Required:    true,
+				Help:        "Path to your .conf file from VPN provider or wg genkey",
+			},
 		}
+
 	case "cloudflare", "cloudflare tunnel":
+		w.helpText = "Cloudflare Tunnel provides secure access without exposing ports. Get your token from the Cloudflare Zero Trust dashboard."
 		w.fields = []WizardField{
-			{Name: "token", Label: "Tunnel Token", Placeholder: "eyJ...", Required: true, Secret: true},
-			{Name: "tunnel_name", Label: "Tunnel Name", Placeholder: "my-tunnel", Required: false},
+			{
+				Name:        "token",
+				Label:       "Tunnel Token",
+				Placeholder: "eyJ...",
+				Required:    true,
+				Secret:      true,
+				Help:        "Get from: Cloudflare Zero Trust → Networks → Tunnels → Create → Copy token",
+			},
+			{
+				Name:        "tunnel_name",
+				Label:       "Tunnel Name",
+				Placeholder: "my-tunnel",
+				Required:    false,
+				Help:        "Optional: Only needed if using 'cloudflared login' instead of token",
+			},
 		}
+
 	case "ngrok":
+		w.helpText = "ngrok creates public URLs for local services. Sign up at ngrok.com to get your auth token."
 		w.fields = []WizardField{
-			{Name: "auth_token", Label: "Auth Token", Placeholder: "2abc123...", Required: true, Secret: true},
-			{Name: "region", Label: "Region", Value: "us", Placeholder: "us/eu/ap/au", Required: false},
-			{Name: "port", Label: "Local Port", Value: "22", Placeholder: "22", Required: true},
-			{Name: "proto", Label: "Protocol", Value: "tcp", Placeholder: "tcp/http", Required: false},
+			{
+				Name:        "auth_token",
+				Label:       "Auth Token",
+				Placeholder: "2abc123...",
+				Required:    true,
+				Secret:      true,
+				Help:        "Get from: ngrok.com → Dashboard → Your Authtoken (copy the token)",
+			},
+			{
+				Name:        "region",
+				Label:       "Region",
+				Value:       "us",
+				Placeholder: "us/eu/ap/au",
+				Required:    false,
+				Help:        "Server region: us (USA), eu (Europe), ap (Asia), au (Australia)",
+			},
+			{
+				Name:        "port",
+				Label:       "Local Port",
+				Value:       "22",
+				Placeholder: "22",
+				Required:    true,
+				Help:        "Local port to expose (22 for SSH, 80 for HTTP, etc.)",
+			},
+			{
+				Name:        "proto",
+				Label:       "Protocol",
+				Value:       "tcp",
+				Placeholder: "tcp/http",
+				Required:    false,
+				Help:        "Protocol type: tcp (SSH, databases) or http (web servers)",
+			},
 		}
+
 	case "zerotier":
+		w.helpText = "ZeroTier creates virtual networks. Create a network at my.zerotier.com and copy the Network ID."
 		w.fields = []WizardField{
-			{Name: "network_id", Label: "Network ID", Placeholder: "16-char hex", Required: true},
+			{
+				Name:        "network_id",
+				Label:       "Network ID",
+				Placeholder: "16-char hex",
+				Required:    true,
+				Help:        "Get from: my.zerotier.com → Create Network → Copy 16-char Network ID",
+			},
 		}
+
 	case "bore":
+		w.helpText = "bore is a simple TCP tunnel. The public server bore.pub is free to use, or self-host your own."
 		w.fields = []WizardField{
-			{Name: "server", Label: "Server Address", Value: "bore.pub", Placeholder: "bore.pub", Required: true},
-			{Name: "local_port", Label: "Local Port", Value: "22", Placeholder: "22", Required: true},
-			{Name: "remote_port", Label: "Remote Port", Placeholder: "auto", Required: false},
+			{
+				Name:        "server",
+				Label:       "Server Address",
+				Value:       "bore.pub",
+				Placeholder: "bore.pub",
+				Required:    true,
+				Help:        "Public bore server (bore.pub) or your self-hosted server address",
+			},
+			{
+				Name:        "local_port",
+				Label:       "Local Port",
+				Value:       "22",
+				Placeholder: "22",
+				Required:    true,
+				Help:        "Local port to expose (22 for SSH)",
+			},
+			{
+				Name:        "remote_port",
+				Label:       "Remote Port",
+				Placeholder: "auto",
+				Required:    false,
+				Help:        "Optional: Specific remote port, or leave empty for auto-assigned",
+			},
 		}
+
 	default:
+		w.helpText = "This provider requires minimal configuration."
 		w.fields = []WizardField{
 			{Name: "note", Label: "Note", Value: "No configuration needed", Required: false},
 		}
@@ -448,7 +563,14 @@ func (w *Wizard) View() string {
 	// Title
 	title := fmt.Sprintf("Configure %s Connection", w.providerName)
 	content.WriteString(TitleStyle.Render(title))
-	content.WriteString("\n\n")
+	content.WriteString("\n")
+
+	// Provider help text (explains where to get credentials)
+	if w.helpText != "" {
+		content.WriteString(InfoStyle.Render(w.helpText))
+		content.WriteString("\n")
+	}
+	content.WriteString("\n")
 
 	// Show installation status if installing
 	if w.installing {
@@ -511,6 +633,12 @@ func (w *Wizard) View() string {
 		}
 		content.WriteString(valueDisplay)
 		content.WriteString("\n")
+
+		// Show help text for selected field
+		if i == w.selectedField && field.Help != "" {
+			content.WriteString(HelpDescStyle.Render("    ℹ " + field.Help))
+			content.WriteString("\n")
+		}
 	}
 
 	// Error message
@@ -590,6 +718,17 @@ func (w *Wizard) renderCompact() string {
 			content.WriteString(ListItemStyle.Render(" " + label + ": " + value))
 		}
 		content.WriteString("\n")
+
+		// Show truncated help for selected field in compact mode
+		if i == w.selectedField && field.Help != "" {
+			help := field.Help
+			maxLen := w.width - 4
+			if maxLen > 0 && len(help) > maxLen {
+				help = help[:maxLen-3] + "..."
+			}
+			content.WriteString(HelpDescStyle.Render(help))
+			content.WriteString("\n")
+		}
 	}
 
 	if w.errorMsg != "" {
