@@ -27,6 +27,9 @@ type App struct {
 	width       int
 	height      int
 	showHelp    bool
+	showWizard  bool
+	errorMsg    string
+	errorTimer  int
 
 	// Dependencies
 	registry  *registry.Registry
@@ -40,6 +43,7 @@ type App struct {
 	monitor   *Monitor
 	logs      *Logs
 	help      *Help
+	wizard    *Wizard
 }
 
 // Message types for view switching
@@ -50,6 +54,16 @@ type SwitchViewMsg struct {
 type ToggleHelpMsg struct{}
 
 type RefreshConnectionsMsg struct{}
+
+// OpenWizardMsg requests opening the connection wizard
+type OpenWizardMsg struct {
+	ProviderName string
+}
+
+// ShowErrorMsg displays an error message
+type ShowErrorMsg struct {
+	Message string
+}
 
 // NewApp creates a new TUI application instance
 func NewApp(reg *registry.Registry, mgr *core.DefaultConnectionManager, cfg *config.Config) *App {
@@ -89,8 +103,54 @@ func (a *App) refreshConnections() tea.Cmd {
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Handle wizard mode first
+	if a.showWizard && a.wizard != nil {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			// Pass to wizard
+			updatedWizard, cmd := a.wizard.Update(msg)
+			a.wizard = updatedWizard.(*Wizard)
+			return a, cmd
+
+		case WizardCompleteMsg:
+			a.showWizard = false
+			if msg.Success {
+				// Refresh connections and show success
+				a.errorMsg = ""
+				if a.dashboard != nil {
+					a.dashboard.RefreshConnections()
+				}
+				if a.monitor != nil {
+					a.monitor.RefreshConnections()
+				}
+				// Switch to monitor to see the connection
+				a.currentView = ViewMonitor
+			} else if msg.Error != nil {
+				a.errorMsg = msg.Error.Error()
+			}
+			return a, nil
+
+		case WizardCancelMsg:
+			a.showWizard = false
+			a.wizard = nil
+			return a, nil
+
+		case tea.WindowSizeMsg:
+			a.width = msg.Width
+			a.height = msg.Height
+			a.wizard.SetSize(msg.Width, msg.Height)
+			return a, nil
+		}
+		return a, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Clear error message on any key
+		if a.errorMsg != "" {
+			a.errorMsg = ""
+		}
+
 		// Global key bindings
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -159,6 +219,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.showHelp = !a.showHelp
 		return a, nil
 
+	case OpenWizardMsg:
+		// Create and show the wizard for the selected provider
+		a.wizard = NewWizard(a.registry, msg.ProviderName)
+		a.wizard.SetSize(a.width, a.height)
+		a.showWizard = true
+		return a, nil
+
+	case ShowErrorMsg:
+		a.errorMsg = msg.Message
+		return a, nil
+
 	case RefreshConnectionsMsg:
 		// Refresh connections in the dashboard and monitor
 		if a.dashboard != nil {
@@ -205,6 +276,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the application UI
 func (a *App) View() string {
+	// Show wizard overlay if active
+	if a.showWizard && a.wizard != nil {
+		return a.wizard.View()
+	}
+
 	if a.showHelp {
 		return a.renderHelp()
 	}
@@ -228,6 +304,12 @@ func (a *App) View() string {
 		content = a.monitor.View()
 	case ViewLogs:
 		content = a.logs.View()
+	}
+
+	// Add error message if present
+	if a.errorMsg != "" {
+		errorBox := ErrorStyle.Render(IconCross + " " + a.errorMsg)
+		content = errorBox + "\n\n" + content
 	}
 
 	// Build the full UI based on terminal size

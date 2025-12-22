@@ -486,10 +486,12 @@ func (b *Browser) updateFilteredMethods() {
 	}
 }
 
-// selectMethod handles method selection
+// selectMethod handles method selection - opens the configuration wizard
 func (b *Browser) selectMethod() tea.Cmd {
 	if b.registry == nil {
-		return nil
+		return func() tea.Msg {
+			return ShowErrorMsg{Message: "Registry not available"}
+		}
 	}
 
 	// Get the selected method
@@ -503,32 +505,23 @@ func (b *Browser) selectMethod() tea.Cmd {
 	}
 	method := category.Methods[b.selectedMethod]
 
-	// Get the provider from the registry
+	// Get the provider to check status
 	provider, err := b.registry.GetProvider(method.Name)
 	if err != nil {
-		return nil
+		return func() tea.Msg {
+			return ShowErrorMsg{Message: "Provider not found: " + method.Name}
+		}
 	}
 
-	// Connect the provider in a goroutine
+	// If already connected, show message
+	if provider.IsConnected() {
+		return func() tea.Msg {
+			return ShowErrorMsg{Message: method.Name + " is already connected"}
+		}
+	}
+
+	// Open the configuration wizard
 	return func() tea.Msg {
-		// If already connected, return
-		if provider.IsConnected() {
-			return nil
-		}
-
-		// If not installed, install first
-		if !provider.IsInstalled() {
-			if err := provider.Install(); err != nil {
-				return nil
-			}
-		}
-
-		// Connect the provider
-		if err := provider.Connect(); err != nil {
-			return nil
-		}
-
-		// Return a refresh message
-		return RefreshConnectionsMsg{}
+		return OpenWizardMsg{ProviderName: method.Name}
 	}
 }
