@@ -168,6 +168,13 @@ func (w *Wizard) setupFields() {
 		w.helpText = "Cloudflare Tunnel provides secure access without exposing ports. Get your token from the Cloudflare Zero Trust dashboard."
 		w.fields = []WizardField{
 			{
+				Name:        "display_name",
+				Label:       "Connection Name",
+				Placeholder: "my-server",
+				Required:    false,
+				Help:        "A friendly name to identify this connection in the monitor",
+			},
+			{
 				Name:        "token",
 				Label:       "Tunnel Token",
 				Placeholder: "eyJ...",
@@ -187,6 +194,13 @@ func (w *Wizard) setupFields() {
 	case "ngrok":
 		w.helpText = "ngrok creates public URLs for local services. Sign up at ngrok.com to get your auth token."
 		w.fields = []WizardField{
+			{
+				Name:        "display_name",
+				Label:       "Connection Name",
+				Placeholder: "my-server",
+				Required:    false,
+				Help:        "A friendly name to identify this connection in the monitor",
+			},
 			{
 				Name:        "auth_token",
 				Label:       "Auth Token",
@@ -225,6 +239,13 @@ func (w *Wizard) setupFields() {
 		w.helpText = "ZeroTier creates virtual networks. Create a network at my.zerotier.com and copy the Network ID."
 		w.fields = []WizardField{
 			{
+				Name:        "display_name",
+				Label:       "Connection Name",
+				Placeholder: "my-network",
+				Required:    false,
+				Help:        "A friendly name to identify this connection in the monitor",
+			},
+			{
 				Name:        "network_id",
 				Label:       "Network ID",
 				Placeholder: "16-char hex",
@@ -236,6 +257,13 @@ func (w *Wizard) setupFields() {
 	case "bore":
 		w.helpText = "bore is a simple TCP tunnel. The public server bore.pub is free to use, or self-host your own."
 		w.fields = []WizardField{
+			{
+				Name:        "display_name",
+				Label:       "Connection Name",
+				Placeholder: "my-tunnel",
+				Required:    false,
+				Help:        "A friendly name to identify this connection in the monitor",
+			},
 			{
 				Name:        "server",
 				Label:       "Server Address",
@@ -497,7 +525,7 @@ func (w *Wizard) connect() tea.Cmd {
 				}
 			case "server":
 				config.RemoteHost = field.Value
-			case "hostname":
+			case "hostname", "display_name":
 				displayName = field.Value
 			default:
 				// Store in Extra

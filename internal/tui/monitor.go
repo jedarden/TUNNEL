@@ -446,11 +446,8 @@ func (m *Monitor) renderCompactView() string {
 		// Health icon
 		healthIcon := m.getHealthIcon(conn.Health)
 
-		// Connection name
+		// Connection name - no truncation
 		name := conn.Method
-		if len(name) > 15 {
-			name = name[:12] + "..."
-		}
 
 		// Build line
 		line := fmt.Sprintf("%s %s", healthIcon, name)
@@ -490,20 +487,33 @@ func (m *Monitor) renderStatusLine() string {
 func (m *Monitor) renderConnectionTable() string {
 	var b strings.Builder
 
-	// Table header
-	header := fmt.Sprintf("%-3s %-20s %-12s %-10s %-12s %-12s %-10s",
-		"", "METHOD", "STATUS", "LATENCY", "SENT", "RECEIVED", "UPTIME")
+	// Calculate the maximum method name length for dynamic column width
+	maxMethodLen := 6 // minimum "METHOD" header length
+	for _, conn := range m.connections {
+		if len(conn.Method) > maxMethodLen {
+			maxMethodLen = len(conn.Method)
+		}
+	}
+	// Add padding
+	maxMethodLen += 2
+
+	// Table header with dynamic method column width
+	headerFmt := fmt.Sprintf("%%-%ds %%-%ds %%-12s %%-10s %%-12s %%-12s %%-10s", 3, maxMethodLen)
+	header := fmt.Sprintf(headerFmt, "", "METHOD", "STATUS", "LATENCY", "SENT", "RECEIVED", "UPTIME")
 	b.WriteString(SubtitleStyle.Render(header))
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", m.width))
 	b.WriteString("\n")
+
+	// Row format with dynamic method column width
+	rowFmt := fmt.Sprintf("%%-%ds %%-%ds %%-12s %%-10s %%-12s %%-12s %%-10s", 3, maxMethodLen)
 
 	// Table rows
 	for i, conn := range m.connections {
 		// Health indicator
 		healthIcon := m.getHealthIcon(conn.Health)
 
-		// Format values
+		// Format values - no truncation for method name
 		status := conn.Status
 		if len(status) > 12 {
 			status = status[:9] + "..."
@@ -518,10 +528,10 @@ func (m *Monitor) renderConnectionTable() string {
 		received := formatBytes(conn.BytesReceived)
 		uptime := formatDuration(conn.Uptime)
 
-		// Build row
-		row := fmt.Sprintf("%-3s %-20s %-12s %-10s %-12s %-12s %-10s",
+		// Build row with full method name
+		row := fmt.Sprintf(rowFmt,
 			healthIcon,
-			truncate(conn.Method, 20),
+			conn.Method,
 			status,
 			latency,
 			sent,
