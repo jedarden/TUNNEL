@@ -1,5 +1,11 @@
 # Marathon Coding - Startup Instructions
 
+## Critical Flags
+
+**IMPORTANT**: Marathon coding sessions MUST use these flags:
+- `--dangerously-skip-permissions` - Skip all permission prompts for autonomous execution
+- `-p` (headless mode) - Run without TUI for clean logging and background execution
+
 ## Quick Start
 
 ### 1. Create a new tmux session
@@ -12,21 +18,22 @@ tmux new-session -s tunnel-marathon
 cd /workspaces/ardenone-cluster/tunnel
 ```
 
-### 3. Start Claude Code with the mission
+### 3. Start Claude Code with the mission (HEADLESS + NO PERMISSIONS)
 ```bash
-claude --print ".marathon/mission.md" "Execute this marathon coding mission. Update GitHub issue #1 with progress after each phase. Work through all phases systematically."
+claude -p --dangerously-skip-permissions "Read .marathon/mission.md and execute the marathon coding mission. Update GitHub issue #1 after each phase. Work autonomously through all 4 phases."
 ```
 
 Or use the resume flag if continuing:
 ```bash
-claude --resume
+claude -p --dangerously-skip-permissions --resume
 ```
 
-## Alternative: Background Execution
+## Recommended: Background Execution
 
-Run in background with logging:
+Run in background with logging (HEADLESS MODE):
 ```bash
-tmux new-session -d -s tunnel-marathon "claude --print .marathon/mission.md 'Execute this marathon coding mission. Update GitHub issue #1 with progress.' 2>&1 | tee .marathon/session.log"
+tmux new-session -d -s tunnel-marathon -c /workspaces/ardenone-cluster/tunnel \
+  'claude -p --dangerously-skip-permissions "Read .marathon/mission.md and execute the marathon coding mission. Update GitHub issue #1 after each phase. Work autonomously through all 4 phases." 2>&1 | tee .marathon/session.log'
 ```
 
 Attach to monitor:
@@ -34,11 +41,22 @@ Attach to monitor:
 tmux attach -t tunnel-marathon
 ```
 
+## One-Liner Launch
+
+```bash
+tmux new-session -d -s tunnel-marathon -c /workspaces/ardenone-cluster/tunnel 'claude -p --dangerously-skip-permissions "Read .marathon/mission.md and execute the marathon coding mission. Update GitHub issue #1 after each phase." 2>&1 | tee .marathon/session.log'
+```
+
 ## Monitoring Progress
 
 ### Check GitHub Issue
 ```bash
 gh issue view 1 --comments
+```
+
+### Watch session log (if running in background)
+```bash
+tail -f /workspaces/ardenone-cluster/tunnel/.marathon/session.log
 ```
 
 ### Watch for file changes
@@ -69,14 +87,23 @@ tmux kill-session -t tunnel-marathon
 ## Files
 
 - **Mission**: `.marathon/mission.md` - The full mission brief
-- **Log**: `.marathon/session.log` - Session output (if using background mode)
+- **Log**: `.marathon/session.log` - Session output (headless mode logs here)
 - **Issue**: https://github.com/jedarden/tunnel/issues/1
 
 ## Expected Duration
 
 - Phase 1 (Providers): ~2-3 hours
-- Phase 2 (Integration): ~1-2 hours  
+- Phase 2 (Integration): ~1-2 hours
 - Phase 3 (Testing): ~1-2 hours
 - Phase 4 (CI/CD): ~30 mins
 
 **Total estimated: 5-8 hours**
+
+## Flag Reference
+
+| Flag | Purpose |
+|------|---------|
+| `-p` | Headless/print mode - no TUI, outputs to stdout |
+| `--dangerously-skip-permissions` | Skip all permission prompts for autonomous execution |
+| `--resume` | Resume previous conversation |
+| `-c` | Continue most recent conversation |
