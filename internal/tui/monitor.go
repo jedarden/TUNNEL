@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -13,16 +15,17 @@ import (
 
 // MonitorConnection represents a connection in the monitor view
 type MonitorConnection struct {
-	ID            string
-	Method        string
-	Status        string
-	Latency       time.Duration
-	BytesSent     int64
-	BytesReceived int64
-	Uptime        time.Duration
-	LocalIP       string
-	RemoteIP      string
-	Health        string // "healthy", "degraded", "failed"
+	ID               string
+	Method           string
+	Status           string
+	Latency          time.Duration
+	BytesSent        int64
+	BytesReceived    int64
+	Uptime           time.Duration
+	LocalIP          string
+	RemoteIP         string
+	Health           string // "healthy", "degraded", "failed"
+	TokenFingerprint string // Last 8 chars of token hash to identify which token is used
 }
 
 // Monitor is the connection monitor view model
@@ -201,17 +204,24 @@ func (m *Monitor) RefreshConnections() {
 				}
 			}
 
+			// Generate token fingerprint if available
+			tokenFingerprint := ""
+			if instance.Config != nil && instance.Config.AuthToken != "" {
+				tokenFingerprint = generateTokenFingerprint(instance.Config.AuthToken)
+			}
+
 			monConn := MonitorConnection{
-				ID:            instance.ID,
-				Method:        instance.DisplayName,
-				Status:        status,
-				Latency:       latency,
-				BytesSent:     bytesSent,
-				BytesReceived: bytesReceived,
-				Uptime:        uptime,
-				LocalIP:       localIP,
-				RemoteIP:      remoteIP,
-				Health:        health,
+				ID:               instance.ID,
+				Method:           instance.DisplayName,
+				Status:           status,
+				Latency:          latency,
+				BytesSent:        bytesSent,
+				BytesReceived:    bytesReceived,
+				Uptime:           uptime,
+				LocalIP:          localIP,
+				RemoteIP:         remoteIP,
+				Health:           health,
+				TokenFingerprint: tokenFingerprint,
 			}
 
 			connections = append(connections, monConn)
@@ -573,6 +583,10 @@ func (m *Monitor) renderConnectionDetails(conn MonitorConnection) string {
 		parts = append(parts, fmt.Sprintf("ID: %s", conn.ID))
 	}
 
+	if conn.TokenFingerprint != "" {
+		parts = append(parts, fmt.Sprintf("Token: ...%s", conn.TokenFingerprint))
+	}
+
 	if conn.LocalIP != "" && conn.LocalIP != "-" {
 		parts = append(parts, fmt.Sprintf("Local: %s", conn.LocalIP))
 	}
@@ -586,6 +600,21 @@ func (m *Monitor) renderConnectionDetails(conn MonitorConnection) string {
 	}
 
 	return "  " + strings.Join(parts, " | ")
+}
+
+// generateTokenFingerprint creates a short fingerprint from a token for identification
+// Uses SHA256 hash and takes last 8 characters
+func generateTokenFingerprint(token string) string {
+	if token == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(token))
+	hashStr := hex.EncodeToString(hash[:])
+	// Return last 8 characters of the hash
+	if len(hashStr) >= 8 {
+		return hashStr[len(hashStr)-8:]
+	}
+	return hashStr
 }
 
 // renderHelp renders help text
