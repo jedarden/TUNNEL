@@ -421,6 +421,8 @@ func (m *Monitor) renderTinyView() string {
 		b.WriteString(HelpDescStyle.Render(fmt.Sprintf("↑%s ↓%s",
 			formatBytes(conn.BytesSent),
 			formatBytes(conn.BytesReceived))))
+		b.WriteString("\n")
+		b.WriteString(HelpDescStyle.Render("d:disc x:del"))
 	}
 
 	return b.String()
@@ -475,8 +477,8 @@ func (m *Monitor) renderCompactView() string {
 		b.WriteString("\n")
 	}
 
-	// Help
-	b.WriteString(HelpDescStyle.Render("↑↓:nav r:refresh p:pause"))
+	// Help - include disconnect/delete keys
+	b.WriteString(HelpDescStyle.Render("↑↓:nav d:disconnect x:del r:refresh"))
 
 	return b.String()
 }
