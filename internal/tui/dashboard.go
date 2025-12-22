@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jedarden/tunnel/internal/core"
+	"github.com/jedarden/tunnel/internal/registry"
 )
 
 // Connection represents an active connection
@@ -34,31 +36,16 @@ type Dashboard struct {
 	selectedAction int
 	width          int
 	height         int
+
+	// Dependencies
+	registry *registry.Registry
+	manager  *core.DefaultConnectionManager
 }
 
 // NewDashboard creates a new dashboard instance
-func NewDashboard() *Dashboard {
-	return &Dashboard{
-		connections: []Connection{
-			{
-				ID:       "conn-001",
-				Method:   "Tailscale",
-				Status:   "connected",
-				IP:       "100.64.0.1",
-				Upload:   "1.2 MB/s",
-				Download: "3.4 MB/s",
-				Icon:     IconConnected,
-			},
-			{
-				ID:       "conn-002",
-				Method:   "WireGuard",
-				Status:   "ready",
-				IP:       "10.0.0.1",
-				Upload:   "0 KB/s",
-				Download: "0 KB/s",
-				Icon:     IconReady,
-			},
-		},
+func NewDashboard(reg *registry.Registry, mgr *core.DefaultConnectionManager) *Dashboard {
+	d := &Dashboard{
+		connections: []Connection{},
 		quickActions: []string{
 			"Connect to new method",
 			"View all connections",
@@ -67,20 +54,93 @@ func NewDashboard() *Dashboard {
 			"System monitor",
 		},
 		systemStatus: []SystemStatus{
-			{Name: "SSH Server", Status: "connected", Info: "Port 22"},
+			{Name: "SSH Server", Status: "ready", Info: "Port 22"},
 			{Name: "Firewall", Status: "ready", Info: "UFW enabled"},
-			{Name: "Container", Status: "connected", Info: "Docker running"},
+			{Name: "Container", Status: "ready", Info: "Docker available"},
 			{Name: "Network", Status: "connected", Info: "eth0 up"},
 		},
 		selectedAction: 0,
 		width:          80,
 		height:         24,
+		registry:       reg,
+		manager:        mgr,
 	}
+
+	// Load initial connections
+	d.RefreshConnections()
+
+	return d
 }
 
 // Init initializes the dashboard
 func (d *Dashboard) Init() tea.Cmd {
 	return nil
+}
+
+// RefreshConnections populates connections from the registry
+func (d *Dashboard) RefreshConnections() {
+	if d.registry == nil {
+		return
+	}
+
+	// Get connected providers from registry
+	connectedProviders := d.registry.GetConnectedProviders()
+
+	// Convert to Connection structs for display
+	connections := make([]Connection, 0, len(connectedProviders))
+	for _, provider := range connectedProviders {
+		connInfo, err := provider.GetConnectionInfo()
+		if err != nil {
+			continue
+		}
+
+		// Determine upload/download metrics
+		upload := "0 KB/s"
+		download := "0 KB/s"
+
+		// Get health status for metrics
+		health, err := provider.HealthCheck()
+		if err == nil && health != nil {
+			if health.BytesSent > 0 {
+				upload = fmt.Sprintf("%.2f MB", float64(health.BytesSent)/(1024*1024))
+			}
+			if health.BytesReceived > 0 {
+				download = fmt.Sprintf("%.2f MB", float64(health.BytesReceived)/(1024*1024))
+			}
+		}
+
+		conn := Connection{
+			ID:       provider.Name(),
+			Method:   provider.Name(),
+			Status:   "connected",
+			IP:       connInfo.LocalIP,
+			Upload:   upload,
+			Download: download,
+			Icon:     IconConnected,
+		}
+		connections = append(connections, conn)
+	}
+
+	// Get installed but not connected providers
+	installedProviders := d.registry.GetInstalledProviders()
+	for _, provider := range installedProviders {
+		if provider.IsConnected() {
+			continue // Already added above
+		}
+
+		conn := Connection{
+			ID:       provider.Name(),
+			Method:   provider.Name(),
+			Status:   "ready",
+			IP:       "-",
+			Upload:   "0 KB/s",
+			Download: "0 KB/s",
+			Icon:     IconReady,
+		}
+		connections = append(connections, conn)
+	}
+
+	d.connections = connections
 }
 
 // SetSize updates the dashboard dimensions
@@ -239,6 +299,8 @@ func (d *Dashboard) executeAction(action int) tea.Cmd {
 			return SwitchViewMsg{view: ViewBrowser}
 		}
 	case 1: // View all connections
+		// Refresh connection data before switching
+		d.RefreshConnections()
 		return func() tea.Msg {
 			return SwitchViewMsg{view: ViewMonitor}
 		}
@@ -251,6 +313,7 @@ func (d *Dashboard) executeAction(action int) tea.Cmd {
 			return SwitchViewMsg{view: ViewLogs}
 		}
 	case 4: // System monitor
+		d.RefreshConnections()
 		return func() tea.Msg {
 			return SwitchViewMsg{view: ViewMonitor}
 		}

@@ -5,6 +5,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jedarden/tunnel/internal/core"
+	"github.com/jedarden/tunnel/internal/registry"
 )
 
 // ViewMode represents the current active view
@@ -25,6 +27,10 @@ type App struct {
 	height      int
 	showHelp    bool
 
+	// Dependencies
+	registry *registry.Registry
+	manager  *core.DefaultConnectionManager
+
 	// Sub-models
 	dashboard *Dashboard
 	browser   *Browser
@@ -43,12 +49,16 @@ type WindowSizeMsg struct {
 	height int
 }
 
+type RefreshConnectionsMsg struct{}
+
 // NewApp creates a new TUI application instance
-func NewApp() *App {
+func NewApp(reg *registry.Registry, mgr *core.DefaultConnectionManager) *App {
 	return &App{
 		currentView: ViewDashboard,
-		dashboard:   NewDashboard(),
-		browser:     NewBrowser(),
+		registry:    reg,
+		manager:     mgr,
+		dashboard:   NewDashboard(reg, mgr),
+		browser:     NewBrowser(reg),
 		help:        NewHelp(),
 		showHelp:    false,
 		width:       80,
@@ -58,7 +68,14 @@ func NewApp() *App {
 
 // Init initializes the application
 func (a *App) Init() tea.Cmd {
-	return nil
+	return a.refreshConnections()
+}
+
+// refreshConnections returns a tea.Cmd to fetch real connection data
+func (a *App) refreshConnections() tea.Cmd {
+	return func() tea.Msg {
+		return RefreshConnectionsMsg{}
+	}
 }
 
 // Update handles messages and updates the model
@@ -130,6 +147,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ToggleHelpMsg:
 		a.showHelp = !a.showHelp
+		return a, nil
+
+	case RefreshConnectionsMsg:
+		// Refresh connections in the dashboard
+		if a.dashboard != nil {
+			a.dashboard.RefreshConnections()
+		}
 		return a, nil
 	}
 

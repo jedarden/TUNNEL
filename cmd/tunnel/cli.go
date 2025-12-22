@@ -6,9 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/fatih/color"
+	"github.com/jedarden/tunnel/internal/core"
+	"github.com/jedarden/tunnel/internal/providers"
+	"github.com/jedarden/tunnel/internal/registry"
+	"github.com/jedarden/tunnel/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -17,6 +22,10 @@ var (
 	cfgFile    string
 	verbose    bool
 	jsonOutput bool
+
+	manager   *core.DefaultConnectionManager
+	reg       *registry.Registry
+	appConfig *config.Config
 )
 
 // Execute runs the root command
@@ -78,6 +87,28 @@ func initCLI() {
 	}
 	if verbose {
 		viper.Set("verbose", true)
+	}
+
+	// Load application config
+	var err error
+	appConfig, err = config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load config: %v\n", err)
+		// Use default config if loading fails
+		appConfig = config.GetDefaultConfig()
+	}
+
+	// Create registry with all providers
+	reg = registry.NewRegistry()
+
+	// Create connection manager
+	manager = core.NewConnectionManager(nil)
+
+	// Register all providers from registry with the connection manager
+	for _, provider := range reg.ListProviders() {
+		// Create a ConnectionProvider adapter for each Provider
+		adapter := &providerAdapter{provider: provider}
+		manager.RegisterProvider(adapter)
 	}
 }
 
@@ -329,15 +360,73 @@ func startConnection(method string) error {
 	if verbose {
 		fmt.Printf("Starting connection with method: %s\n", method)
 	}
-	// TODO: Implement connection start
-	if jsonOutput {
-		output := map[string]interface{}{
-			"status": "started",
-			"method": method,
-		}
-		return printJSON(output)
+
+	// Get provider from registry
+	provider, err := reg.GetProvider(method)
+	if err != nil {
+		return fmt.Errorf("provider not found: %s", method)
 	}
-	color.Green("Started %s connection", method)
+
+	// Check if already connected
+	if provider.IsConnected() {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":  "error",
+				"message": "already connected",
+				"method":  method,
+			}
+			return printJSON(output)
+		}
+		color.Yellow("%s is already connected", method)
+		return nil
+	}
+
+	// Connect using the provider
+	if err := provider.Connect(); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+				"method": method,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	// Get connection info
+	connInfo, err := provider.GetConnectionInfo()
+	if err == nil && connInfo != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":          "started",
+				"method":          method,
+				"connection_info": connInfo,
+			}
+			return printJSON(output)
+		}
+
+		color.Green("✓ Started %s connection", method)
+		if connInfo.TunnelURL != "" {
+			fmt.Printf("  Tunnel URL: %s\n", color.CyanString(connInfo.TunnelURL))
+		}
+		if connInfo.LocalIP != "" {
+			fmt.Printf("  Local IP: %s\n", color.CyanString(connInfo.LocalIP))
+		}
+		if connInfo.RemoteIP != "" {
+			fmt.Printf("  Remote IP: %s\n", color.CyanString(connInfo.RemoteIP))
+		}
+	} else {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status": "started",
+				"method": method,
+			}
+			return printJSON(output)
+		}
+		color.Green("✓ Started %s connection", method)
+	}
+
 	return nil
 }
 
@@ -345,7 +434,85 @@ func stopConnection(method string) error {
 	if verbose {
 		fmt.Printf("Stopping connection: %s\n", method)
 	}
-	// TODO: Implement connection stop
+
+	// Handle "all" to stop all connections
+	if method == "all" {
+		providers := reg.GetConnectedProviders()
+		if len(providers) == 0 {
+			if jsonOutput {
+				output := map[string]interface{}{
+					"status":  "info",
+					"message": "no active connections",
+				}
+				return printJSON(output)
+			}
+			color.Yellow("No active connections to stop")
+			return nil
+		}
+
+		errors := []string{}
+		for _, provider := range providers {
+			if err := provider.Disconnect(); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", provider.Name(), err))
+			} else if verbose {
+				fmt.Printf("Stopped %s\n", provider.Name())
+			}
+		}
+
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":  "stopped",
+				"count":   len(providers),
+				"errors":  errors,
+				"success": len(providers) - len(errors),
+			}
+			return printJSON(output)
+		}
+
+		if len(errors) > 0 {
+			color.Yellow("Stopped %d connection(s) with %d error(s):", len(providers)-len(errors), len(errors))
+			for _, errMsg := range errors {
+				fmt.Printf("  - %s\n", errMsg)
+			}
+		} else {
+			color.Green("✓ Stopped all %d connection(s)", len(providers))
+		}
+		return nil
+	}
+
+	// Stop specific provider
+	provider, err := reg.GetProvider(method)
+	if err != nil {
+		return fmt.Errorf("provider not found: %s", method)
+	}
+
+	// Check if connected
+	if !provider.IsConnected() {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":  "info",
+				"message": "not connected",
+				"method":  method,
+			}
+			return printJSON(output)
+		}
+		color.Yellow("%s is not connected", method)
+		return nil
+	}
+
+	// Disconnect
+	if err := provider.Disconnect(); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+				"method": method,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to disconnect: %w", err)
+	}
+
 	if jsonOutput {
 		output := map[string]interface{}{
 			"status": "stopped",
@@ -353,7 +520,8 @@ func stopConnection(method string) error {
 		}
 		return printJSON(output)
 	}
-	color.Yellow("Stopped %s connection", method)
+
+	color.Green("✓ Stopped %s connection", method)
 	return nil
 }
 
@@ -369,53 +537,143 @@ func restartConnection(method string) error {
 }
 
 func showStatus() error {
-	// TODO: Implement status display
+	providers := reg.ListProviders()
+
 	if jsonOutput {
-		output := map[string]interface{}{
-			"connections": []map[string]interface{}{
-				{"method": "cloudflared", "status": "inactive"},
-				{"method": "ngrok", "status": "inactive"},
-				{"method": "tailscale", "status": "inactive"},
-				{"method": "bore", "status": "inactive"},
-				{"method": "localhost.run", "status": "inactive"},
-			},
+		connections := []map[string]interface{}{}
+		for _, provider := range providers {
+			info := map[string]interface{}{
+				"name":      provider.Name(),
+				"category":  provider.Category(),
+				"installed": provider.IsInstalled(),
+				"connected": provider.IsConnected(),
+			}
+
+			// Add connection info if connected
+			if provider.IsConnected() {
+				if connInfo, err := provider.GetConnectionInfo(); err == nil && connInfo != nil {
+					info["connection_info"] = connInfo
+				}
+			}
+
+			connections = append(connections, info)
 		}
-		return printJSON(output)
+		return printJSON(map[string]interface{}{"connections": connections})
 	}
 
 	color.Cyan("=== Tunnel Status ===")
 	fmt.Println()
-	methods := []string{"cloudflared", "ngrok", "tailscale", "bore", "localhost.run"}
-	for _, method := range methods {
-		color.White("  %-15s: ", method)
-		color.Red("inactive")
+
+	// Group by category
+	vpnProviders := reg.ListByCategory("vpn")
+	tunnelProviders := reg.ListByCategory("tunnel")
+
+	if len(vpnProviders) > 0 {
+		color.Cyan("VPN Providers:")
+		for _, provider := range vpnProviders {
+			displayProviderStatus(provider)
+		}
+		fmt.Println()
 	}
+
+	if len(tunnelProviders) > 0 {
+		color.Cyan("Tunnel Providers:")
+		for _, provider := range tunnelProviders {
+			displayProviderStatus(provider)
+		}
+	}
+
 	return nil
 }
 
-func listMethods() error {
-	methods := []map[string]interface{}{
-		{"name": "cloudflared", "description": "Cloudflare Tunnel", "enabled": true},
-		{"name": "ngrok", "description": "ngrok tunnel", "enabled": true},
-		{"name": "tailscale", "description": "Tailscale VPN", "enabled": true},
-		{"name": "bore", "description": "bore tunnel", "enabled": true},
-		{"name": "localhost.run", "description": "localhost.run tunnel", "enabled": true},
+func displayProviderStatus(provider providers.Provider) {
+	name := provider.Name()
+	installed := provider.IsInstalled()
+	connected := provider.IsConnected()
+
+	fmt.Printf("  %-15s: ", name)
+
+	if !installed {
+		color.Red("not installed")
+		return
 	}
+
+	if connected {
+		color.Green("connected")
+		// Show connection details
+		if connInfo, err := provider.GetConnectionInfo(); err == nil && connInfo != nil {
+			if connInfo.TunnelURL != "" {
+				fmt.Printf("\n    URL: %s", color.CyanString(connInfo.TunnelURL))
+			}
+			if connInfo.LocalIP != "" {
+				fmt.Printf("\n    Local IP: %s", color.CyanString(connInfo.LocalIP))
+			}
+			if connInfo.RemoteIP != "" {
+				fmt.Printf("\n    Remote IP: %s", color.CyanString(connInfo.RemoteIP))
+			}
+		}
+		fmt.Println()
+	} else {
+		color.Yellow("disconnected")
+	}
+}
+
+func listMethods() error {
+	providerInfo := reg.GetProviderInfo()
 
 	if jsonOutput {
-		return printJSON(map[string]interface{}{"methods": methods})
+		return printJSON(map[string]interface{}{"providers": providerInfo})
 	}
 
-	color.Cyan("=== Available Tunnel Methods ===")
+	color.Cyan("=== Available Tunnel Providers ===")
 	fmt.Println()
-	for _, method := range methods {
-		status := color.GreenString("enabled")
-		if !method["enabled"].(bool) {
-			status = color.RedString("disabled")
+
+	// Group by category
+	vpnProviders := []registry.ProviderInfo{}
+	tunnelProviders := []registry.ProviderInfo{}
+
+	for _, info := range providerInfo {
+		if info.Category == "vpn" {
+			vpnProviders = append(vpnProviders, info)
+		} else if info.Category == "tunnel" {
+			tunnelProviders = append(tunnelProviders, info)
 		}
-		fmt.Printf("  %-15s - %s [%s]\n", method["name"], method["description"], status)
 	}
+
+	if len(vpnProviders) > 0 {
+		color.Cyan("VPN Providers:")
+		for _, info := range vpnProviders {
+			displayProviderInfo(info)
+		}
+		fmt.Println()
+	}
+
+	if len(tunnelProviders) > 0 {
+		color.Cyan("Tunnel Providers:")
+		for _, info := range tunnelProviders {
+			displayProviderInfo(info)
+		}
+	}
+
 	return nil
+}
+
+func displayProviderInfo(info registry.ProviderInfo) {
+	installedStatus := color.GreenString("installed")
+	if !info.Installed {
+		installedStatus = color.RedString("not installed")
+	}
+
+	connectedStatus := ""
+	if info.Installed {
+		if info.Connected {
+			connectedStatus = color.GreenString(" [connected]")
+		} else {
+			connectedStatus = color.YellowString(" [disconnected]")
+		}
+	}
+
+	fmt.Printf("  %-15s - %-20s%s\n", info.Name, installedStatus, connectedStatus)
 }
 
 func configureMethod(method string) error {
@@ -508,9 +766,78 @@ func authLogin(method string) error {
 	if verbose {
 		fmt.Printf("Authenticating with: %s\n", method)
 	}
-	// TODO: Implement authentication
-	color.Yellow("Authentication not yet implemented for: %s", method)
-	return nil
+
+	// Get provider from registry
+	provider, err := reg.GetProvider(method)
+	if err != nil {
+		return fmt.Errorf("provider not found: %s", method)
+	}
+
+	// Check if installed
+	if !provider.IsInstalled() {
+		return fmt.Errorf("%s is not installed. Please install it first", method)
+	}
+
+	// Provider-specific authentication
+	switch method {
+	case "cloudflare":
+		color.Cyan("Launching Cloudflare Tunnel authentication...")
+		fmt.Println("This will open your browser to authenticate with Cloudflare.")
+		cmd := exec.Command("cloudflared", "tunnel", "login")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("authentication failed: %w", err)
+		}
+		color.Green("✓ Cloudflare authentication successful")
+		return nil
+
+	case "ngrok":
+		color.Cyan("Setting up ngrok authentication...")
+		fmt.Print("Enter your ngrok authtoken: ")
+		var authtoken string
+		fmt.Scanln(&authtoken)
+		if authtoken == "" {
+			return fmt.Errorf("authtoken cannot be empty")
+		}
+
+		cmd := exec.Command("ngrok", "config", "add-authtoken", authtoken)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to set authtoken: %w", err)
+		}
+		color.Green("✓ ngrok authentication configured")
+		return nil
+
+	case "tailscale":
+		color.Cyan("Starting Tailscale authentication...")
+		fmt.Println("This will authenticate your device with Tailscale.")
+		cmd := exec.Command("tailscale", "up")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("authentication failed: %w", err)
+		}
+		color.Green("✓ Tailscale authentication successful")
+		return nil
+
+	case "wireguard":
+		color.Yellow("WireGuard uses configuration files for authentication.")
+		fmt.Println("Please configure WireGuard using 'wg-quick' or place your config file in /etc/wireguard/")
+		return nil
+
+	case "zerotier":
+		color.Cyan("Setting up ZeroTier authentication...")
+		fmt.Println("To join a ZeroTier network, use: zerotier-cli join <network-id>")
+		return nil
+
+	default:
+		color.Yellow("Authentication not implemented for: %s", method)
+		return nil
+	}
 }
 
 func setAPIKey(method string) error {
@@ -527,12 +854,13 @@ func setAPIKey(method string) error {
 }
 
 func authStatus() error {
-	methods := []string{"cloudflared", "ngrok", "tailscale", "bore"}
+	providers := reg.ListProviders()
 	statuses := make(map[string]interface{})
 
-	for _, method := range methods {
-		// TODO: Check actual auth status
-		statuses[method] = "not authenticated"
+	for _, provider := range providers {
+		name := provider.Name()
+		status := checkAuthStatus(name)
+		statuses[name] = status
 	}
 
 	if jsonOutput {
@@ -541,19 +869,122 @@ func authStatus() error {
 
 	color.Cyan("=== Authentication Status ===")
 	fmt.Println()
-	for _, method := range methods {
-		status := statuses[method].(string)
-		if strings.Contains(status, "not") {
-			fmt.Printf("  %-15s: %s\n", method, color.RedString(status))
+
+	for _, provider := range providers {
+		name := provider.Name()
+		status := statuses[name].(string)
+
+		fmt.Printf("  %-15s: ", name)
+		if strings.Contains(status, "not") || strings.Contains(status, "unknown") {
+			color.Red(status)
 		} else {
-			fmt.Printf("  %-15s: %s\n", method, color.GreenString(status))
+			color.Green(status)
 		}
 	}
+
 	return nil
+}
+
+func checkAuthStatus(method string) string {
+	homeDir, _ := os.UserHomeDir()
+
+	switch method {
+	case "cloudflare":
+		// Check for cloudflared certificate
+		certPath := filepath.Join(homeDir, ".cloudflared", "cert.pem")
+		if _, err := os.Stat(certPath); err == nil {
+			return "authenticated"
+		}
+		return "not authenticated"
+
+	case "ngrok":
+		// Check ngrok config file for authtoken
+		configPath := filepath.Join(homeDir, ".config", "ngrok", "ngrok.yml")
+		if _, err := os.Stat(configPath); err == nil {
+			// Read config and check for authtoken
+			data, err := os.ReadFile(configPath)
+			if err == nil && strings.Contains(string(data), "authtoken:") {
+				return "authenticated"
+			}
+		}
+		return "not authenticated"
+
+	case "tailscale":
+		// Check if tailscale is authenticated
+		cmd := exec.Command("tailscale", "status")
+		if err := cmd.Run(); err == nil {
+			return "authenticated"
+		}
+		return "not authenticated"
+
+	case "wireguard":
+		// Check for WireGuard config files
+		configDir := "/etc/wireguard"
+		if entries, err := os.ReadDir(configDir); err == nil && len(entries) > 0 {
+			return "configured"
+		}
+		return "not configured"
+
+	case "zerotier":
+		// Check if zerotier service is authorized
+		cmd := exec.Command("zerotier-cli", "info")
+		if err := cmd.Run(); err == nil {
+			return "authenticated"
+		}
+		return "not authenticated"
+
+	case "bore":
+		// bore doesn't require authentication
+		return "no auth required"
+
+	default:
+		return "unknown"
+	}
 }
 
 func printJSON(data interface{}) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(data)
+}
+
+// providerAdapter adapts a providers.Provider to core.ConnectionProvider
+type providerAdapter struct {
+	provider interface {
+		Name() string
+		Connect() error
+		Disconnect() error
+		IsConnected() bool
+	}
+}
+
+func (p *providerAdapter) Name() string {
+	return p.provider.Name()
+}
+
+func (p *providerAdapter) Connect(ctx context.Context, config *core.Config) (*core.Connection, error) {
+	// Use the provider's Connect method
+	if err := p.provider.Connect(); err != nil {
+		return nil, err
+	}
+
+	// Create a connection object
+	conn := core.NewConnection(
+		fmt.Sprintf("%s-%d", p.provider.Name(), os.Getpid()),
+		p.provider.Name(),
+		0, // localPort - not used for most providers
+		"", // remoteHost
+		0,  // remotePort
+	)
+	conn.SetState(core.StateConnected)
+
+	return conn, nil
+}
+
+func (p *providerAdapter) Disconnect(conn *core.Connection) error {
+	return p.provider.Disconnect()
+}
+
+func (p *providerAdapter) IsHealthy(conn *core.Connection) bool {
+	return p.provider.IsConnected()
 }

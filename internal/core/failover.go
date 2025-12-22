@@ -120,9 +120,8 @@ func (fm *FailoverManager) Start() {
 // Stop halts the failover monitoring
 func (fm *FailoverManager) Stop() {
 	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
 	if !fm.running {
+		fm.mu.Unlock()
 		return
 	}
 
@@ -130,8 +129,18 @@ func (fm *FailoverManager) Stop() {
 	if fm.ticker != nil {
 		fm.ticker.Stop()
 	}
+	// Cancel context first to signal goroutines to stop
 	fm.cancel()
-	close(fm.done)
+	fm.mu.Unlock()
+
+	// Wait a bit for goroutines to exit before closing done channel
+	time.Sleep(10 * time.Millisecond)
+
+	// Recreate done channel and context for potential restart
+	fm.mu.Lock()
+	fm.done = make(chan struct{})
+	fm.ctx, fm.cancel = context.WithCancel(context.Background())
+	fm.mu.Unlock()
 }
 
 // monitorLoop continuously monitors connection health

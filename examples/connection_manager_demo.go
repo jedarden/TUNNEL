@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== TUNNEL Connection Manager Demo ===\n")
+	fmt.Println("=== TUNNEL Connection Manager Demo ===")
 
 	// Create connection manager with default config
 	managerConfig := core.DefaultManagerConfig()
@@ -19,7 +19,7 @@ func main() {
 	manager.RegisterProvider(core.NewMockProvider("cloudflare", 0.1, 50*time.Millisecond))
 	manager.RegisterProvider(core.NewMockProvider("tailscale", 0.05, 30*time.Millisecond))
 	manager.RegisterProvider(core.NewMockProvider("ngrok", 0.15, 70*time.Millisecond))
-	fmt.Println("  ✓ Registered: cloudflare, tailscale, ngrok\n")
+	fmt.Println("  ✓ Registered: cloudflare, tailscale, ngrok")
 
 	// Subscribe to events
 	fmt.Println("Setting up event monitoring...")
@@ -31,7 +31,7 @@ func main() {
 				timestamp, event.Type, event.Message, event.ConnID)
 		}
 	}()
-	fmt.Println("  ✓ Event monitoring active\n")
+	fmt.Println("  ✓ Event monitoring active")
 
 	// Create connection configuration
 	connConfig := core.DefaultConfig()
@@ -66,7 +66,7 @@ func main() {
 	// Enable automatic failover
 	fmt.Println("Enabling automatic failover...")
 	manager.EnableAutoFailover(true)
-	fmt.Println("  ✓ Auto-failover enabled\n")
+	fmt.Println("  ✓ Auto-failover enabled")
 
 	// Get primary connection
 	primary, err := manager.GetPrimary()
@@ -138,7 +138,7 @@ func main() {
 		if err != nil {
 			fmt.Printf("  ✗ Error restarting: %v\n", err)
 		} else {
-			fmt.Println("  ✓ Connection restarted\n")
+			fmt.Println("  ✓ Connection restarted")
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -149,7 +149,7 @@ func main() {
 	if err != nil {
 		fmt.Printf("  ✗ Error during shutdown: %v\n", err)
 	} else {
-		fmt.Println("  ✓ Shutdown complete\n")
+		fmt.Println("  ✓ Shutdown complete")
 	}
 
 	fmt.Println("=== Demo Complete ===")

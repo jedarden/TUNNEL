@@ -3,7 +3,6 @@ package system
 import (
 	"bufio"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"

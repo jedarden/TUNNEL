@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jedarden/tunnel/internal/providers"
+	"github.com/jedarden/tunnel/internal/registry"
 )
 
 // MethodCategory represents a category of connection methods
@@ -33,93 +35,15 @@ type Browser struct {
 	filteredMethods  []Method
 	width            int
 	height           int
+
+	// Dependencies
+	registry *registry.Registry
 }
 
 // NewBrowser creates a new browser instance
-func NewBrowser() *Browser {
-	categories := []MethodCategory{
-		{
-			Name: "VPN/Mesh Networks",
-			Methods: []Method{
-				{
-					Name:        "Tailscale",
-					Description: "Zero-config VPN with NAT traversal",
-					Recommended: true,
-					Status:      "available",
-					Category:    "VPN/Mesh Networks",
-				},
-				{
-					Name:        "WireGuard",
-					Description: "Fast, modern VPN protocol",
-					Recommended: true,
-					Status:      "available",
-					Category:    "VPN/Mesh Networks",
-				},
-				{
-					Name:        "ZeroTier",
-					Description: "Global area network management",
-					Recommended: false,
-					Status:      "available",
-					Category:    "VPN/Mesh Networks",
-				},
-				{
-					Name:        "Nebula",
-					Description: "Overlay networking by Slack",
-					Recommended: false,
-					Status:      "available",
-					Category:    "VPN/Mesh Networks",
-				},
-			},
-		},
-		{
-			Name: "Tunnel Services",
-			Methods: []Method{
-				{
-					Name:        "Cloudflare Tunnel",
-					Description: "Secure tunnels without public IPs",
-					Recommended: true,
-					Status:      "available",
-					Category:    "Tunnel Services",
-				},
-				{
-					Name:        "ngrok",
-					Description: "Instant public URLs for local servers",
-					Recommended: false,
-					Status:      "available",
-					Category:    "Tunnel Services",
-				},
-				{
-					Name:        "bore",
-					Description: "Simple TCP tunnel",
-					Recommended: false,
-					Status:      "available",
-					Category:    "Tunnel Services",
-				},
-			},
-		},
-		{
-			Name: "Direct/Traditional",
-			Methods: []Method{
-				{
-					Name:        "VS Code Tunnels",
-					Description: "Remote development tunnels",
-					Recommended: false,
-					Status:      "available",
-					Category:    "Direct/Traditional",
-				},
-				{
-					Name:        "SSH Port Forward",
-					Description: "Traditional SSH tunneling",
-					Recommended: false,
-					Status:      "available",
-					Category:    "Direct/Traditional",
-				},
-			},
-		},
-	}
-
-	return &Browser{
-		categories:       categories,
+func NewBrowser(reg *registry.Registry) *Browser {
+	b := &Browser{
+		categories:       []MethodCategory{},
 		selectedCategory: 0,
 		selectedMethod:   0,
 		searchMode:       false,
@@ -127,7 +51,108 @@ func NewBrowser() *Browser {
 		filteredMethods:  []Method{},
 		width:            80,
 		height:           24,
+		registry:         reg,
 	}
+
+	// Load categories and methods from registry
+	b.loadProvidersFromRegistry()
+
+	return b
+}
+
+// loadProvidersFromRegistry loads providers from the registry and organizes them by category
+func (b *Browser) loadProvidersFromRegistry() {
+	if b.registry == nil {
+		// Fallback to empty categories
+		b.categories = []MethodCategory{}
+		return
+	}
+
+	// Get all providers from registry
+	allProviders := b.registry.ListProviders()
+
+	// Group providers by category
+	categoryMap := make(map[string][]Method)
+	categoryOrder := []string{"VPN/Mesh Networks", "Tunnel Services", "Direct/Traditional"}
+
+	for _, provider := range allProviders {
+		// Map provider category to display category
+		var displayCategory string
+		switch provider.Category() {
+		case providers.CategoryVPN:
+			displayCategory = "VPN/Mesh Networks"
+		case providers.CategoryTunnel:
+			displayCategory = "Tunnel Services"
+		case providers.CategoryDirect:
+			displayCategory = "Direct/Traditional"
+		default:
+			displayCategory = "Other"
+		}
+
+		// Determine status
+		status := "available"
+		if provider.IsConnected() {
+			status = "connected"
+		} else if provider.IsInstalled() {
+			status = "installed"
+		}
+
+		// Determine if recommended (Tailscale, WireGuard, Cloudflare are recommended)
+		recommended := false
+		switch provider.Name() {
+		case "Tailscale", "WireGuard", "Cloudflare Tunnel":
+			recommended = true
+		}
+
+		method := Method{
+			Name:        provider.Name(),
+			Description: b.getProviderDescription(provider.Name()),
+			Recommended: recommended,
+			Status:      status,
+			Category:    displayCategory,
+		}
+
+		categoryMap[displayCategory] = append(categoryMap[displayCategory], method)
+	}
+
+	// Build ordered categories
+	var categories []MethodCategory
+	for _, catName := range categoryOrder {
+		if methods, exists := categoryMap[catName]; exists {
+			categories = append(categories, MethodCategory{
+				Name:    catName,
+				Methods: methods,
+			})
+		}
+	}
+
+	// Add "Other" category if it exists
+	if methods, exists := categoryMap["Other"]; exists {
+		categories = append(categories, MethodCategory{
+			Name:    "Other",
+			Methods: methods,
+		})
+	}
+
+	b.categories = categories
+}
+
+// getProviderDescription returns a description for a provider
+func (b *Browser) getProviderDescription(name string) string {
+	descriptions := map[string]string{
+		"Tailscale":         "Zero-config VPN with NAT traversal",
+		"WireGuard":         "Fast, modern VPN protocol",
+		"ZeroTier":          "Global area network management",
+		"Nebula":            "Overlay networking by Slack",
+		"Cloudflare Tunnel": "Secure tunnels without public IPs",
+		"ngrok":             "Instant public URLs for local servers",
+		"bore":              "Simple TCP tunnel",
+	}
+
+	if desc, exists := descriptions[name]; exists {
+		return desc
+	}
+	return "Network connection provider"
 }
 
 // Init initializes the browser
@@ -388,8 +413,47 @@ func (b *Browser) updateFilteredMethods() {
 
 // selectMethod handles method selection
 func (b *Browser) selectMethod() tea.Cmd {
-	method := b.categories[b.selectedCategory].Methods[b.selectedMethod]
-	// TODO: Implement actual connection logic
-	_ = method
-	return nil
+	if b.registry == nil {
+		return nil
+	}
+
+	// Get the selected method
+	if b.selectedCategory >= len(b.categories) {
+		return nil
+	}
+	category := b.categories[b.selectedCategory]
+
+	if b.selectedMethod >= len(category.Methods) {
+		return nil
+	}
+	method := category.Methods[b.selectedMethod]
+
+	// Get the provider from the registry
+	provider, err := b.registry.GetProvider(method.Name)
+	if err != nil {
+		return nil
+	}
+
+	// Connect the provider in a goroutine
+	return func() tea.Msg {
+		// If already connected, return
+		if provider.IsConnected() {
+			return nil
+		}
+
+		// If not installed, install first
+		if !provider.IsInstalled() {
+			if err := provider.Install(); err != nil {
+				return nil
+			}
+		}
+
+		// Connect the provider
+		if err := provider.Connect(); err != nil {
+			return nil
+		}
+
+		// Return a refresh message
+		return RefreshConnectionsMsg{}
+	}
 }

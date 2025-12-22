@@ -55,7 +55,7 @@ func printUsage() {
 
 func listProviders() {
 	fmt.Println("Available Providers")
-	fmt.Println("===================\n")
+	fmt.Println("===================")
 
 	// Group by category
 	vpnProviders := registry.ListByCategory(providers.CategoryVPN)
@@ -76,7 +76,7 @@ func listProviders() {
 
 func showStatus() {
 	fmt.Println("Provider Status")
-	fmt.Println("===============\n")
+	fmt.Println("===============")
 
 	info := registry.GetProviderInfo()
 

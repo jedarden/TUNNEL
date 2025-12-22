@@ -414,13 +414,13 @@ func (m *DefaultConnectionManager) EnableAutoFailover(enabled bool) {
 	}
 
 	m.failoverManager.mu.Lock()
-	defer m.failoverManager.mu.Unlock()
-
 	m.failoverManager.config.Enabled = enabled
+	running := m.failoverManager.running
+	m.failoverManager.mu.Unlock()
 
-	if enabled && !m.failoverManager.running {
-		go m.failoverManager.Start()
-	} else if !enabled && m.failoverManager.running {
+	if enabled && !running {
+		m.failoverManager.Start()
+	} else if !enabled && running {
 		m.failoverManager.Stop()
 	}
 }
