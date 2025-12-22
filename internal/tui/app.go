@@ -8,6 +8,7 @@ import (
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/jedarden/tunnel/internal/registry"
 	"github.com/jedarden/tunnel/pkg/config"
+	"github.com/jedarden/tunnel/pkg/version"
 )
 
 // InstanceCreatedMsg is sent when a new instance is created
@@ -361,8 +362,10 @@ func (a *App) View() string {
 func (a *App) renderTinyView() string {
 	var b strings.Builder
 
-	// Just show essential info
+	// Just show essential info with version
 	b.WriteString(TitleStyle.Render("TUNNEL"))
+	b.WriteString(" ")
+	b.WriteString(HelpDescStyle.Render("v" + version.Version))
 	b.WriteString(" ")
 
 	// Show current view indicator
@@ -407,7 +410,7 @@ func (a *App) renderTinyView() string {
 
 // renderCompactHeader renders a minimal header
 func (a *App) renderCompactHeader() string {
-	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render("SSH Tunnel Manager")
+	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render("v"+version.Version)
 }
 
 // renderCompactTabs renders compact tab navigation
@@ -435,11 +438,14 @@ func (a *App) renderCompactFooter() string {
 func (a *App) renderHeader() string {
 	title := TitleStyle.Render("TUNNEL")
 	subtitle := SubtitleStyle.Render("Terminal Unified Network Node Encrypted Link")
+	versionStr := HelpDescStyle.Render("v" + version.Version)
 
 	header := lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		title,
 		subtitle,
+		"  ",
+		versionStr,
 	)
 
 	return HeaderStyle.Width(a.width).Render(header)

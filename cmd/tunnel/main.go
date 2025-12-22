@@ -7,9 +7,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jedarden/tunnel/pkg/version"
 	"github.com/spf13/viper"
 )
 
+// These variables are set at build time using ldflags and forwarded to the version package
 var (
 	// Version information (set by build flags)
 	Version   = "dev"
@@ -17,6 +19,14 @@ var (
 	GitCommit = "unknown"
 	GoVersion = "unknown"
 )
+
+func init() {
+	// Forward build-time variables to the version package
+	version.Version = Version
+	version.BuildDate = BuildDate
+	version.GitCommit = GitCommit
+	version.GoVersion = GoVersion
+}
 
 func main() {
 	// Set up signal handling for graceful shutdown

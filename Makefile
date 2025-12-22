@@ -1,14 +1,14 @@
 .PHONY: all build install test clean lint fmt deps dev run help vet doctor version completions
 
 # Ensure Go is in PATH
-export PATH := $(PATH):/usr/local/go/bin
+export PATH := /usr/local/go/bin:$(PATH)
 
 # Build variables
 BINARY_NAME=tunnel
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-GO_VERSION=$(shell go version | awk '{print $$3}')
+GO_VERSION=$(shell /usr/local/go/bin/go version 2>/dev/null | awk '{print $$3}' || go version | awk '{print $$3}')
 LDFLAGS=-ldflags "\
 	-X 'main.Version=$(VERSION)' \
 	-X 'main.BuildDate=$(BUILD_DATE)' \
