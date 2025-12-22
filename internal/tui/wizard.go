@@ -355,8 +355,11 @@ func (w *Wizard) connect() tea.Cmd {
 				config.AuthToken = field.Value
 			case "network_id":
 				config.NetworkID = field.Value
-			case "tunnel_name", "token":
+			case "tunnel_name":
 				config.TunnelName = field.Value
+			case "token":
+				// Cloudflare tunnel token goes to AuthToken
+				config.AuthToken = field.Value
 			case "config_file":
 				config.ConfigFile = field.Value
 			case "port", "local_port":

@@ -87,18 +87,23 @@ func (c *CloudflareProvider) Connect() error {
 		return err
 	}
 
-	if config.TunnelName == "" {
-		return fmt.Errorf("tunnel name is required")
+	// Need either a token OR a tunnel name
+	if config.AuthToken == "" && config.TunnelName == "" {
+		return fmt.Errorf("tunnel token or tunnel name is required")
 	}
 
 	// Start tunnel as background process
 	args := []string{"tunnel", "run"}
 
 	if config.AuthToken != "" {
+		// When using a token, the token contains all tunnel info
+		// Command: cloudflared tunnel run --token <token>
 		args = append(args, "--token", config.AuthToken)
+	} else {
+		// When using tunnel name (requires prior cloudflared login)
+		// Command: cloudflared tunnel run <tunnel_name>
+		args = append(args, config.TunnelName)
 	}
-
-	args = append(args, config.TunnelName)
 
 	cmd := exec.Command("cloudflared", args...)
 	if err := cmd.Start(); err != nil {
