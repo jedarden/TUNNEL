@@ -27,7 +27,38 @@ func (c *CloudflareProvider) Install() error {
 	if c.IsInstalled() {
 		return providers.ErrAlreadyInstalled
 	}
-	return fmt.Errorf("please install cloudflared manually from https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation")
+
+	// Try different installation methods based on OS/package manager
+	installMethods := []struct {
+		name string
+		cmd  string
+		args []string
+	}{
+		// Debian/Ubuntu via apt
+		{"apt", "bash", []string{"-c", "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null && echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main' | sudo tee /etc/apt/sources.list.d/cloudflared.list && sudo apt-get update && sudo apt-get install -y cloudflared"}},
+		// Direct binary download (Linux amd64)
+		{"binary", "bash", []string{"-c", "curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /tmp/cloudflared && chmod +x /tmp/cloudflared && sudo mv /tmp/cloudflared /usr/local/bin/cloudflared"}},
+		// Homebrew (macOS)
+		{"brew", "brew", []string{"install", "cloudflared"}},
+	}
+
+	var lastErr error
+	for _, method := range installMethods {
+		cmd := exec.Command(method.cmd, method.args...)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		// Verify installation
+		if c.IsInstalled() {
+			return nil
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("installation failed: %w", lastErr)
+	}
+	return fmt.Errorf("installation failed: unknown error")
 }
 
 // Uninstall uninstalls cloudflared

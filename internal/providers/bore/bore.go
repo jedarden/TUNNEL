@@ -29,15 +29,37 @@ func (b *BoreProvider) Install() error {
 		return providers.ErrAlreadyInstalled
 	}
 
-	// Try to install via cargo
-	cmd := exec.Command("cargo", "install", "bore-cli")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s\nPlease install bore manually: cargo install bore-cli",
-			providers.ErrInstallFailed, string(output))
+	// Try different installation methods
+	installMethods := []struct {
+		name string
+		cmd  string
+		args []string
+	}{
+		// cargo install (if Rust is available)
+		{"cargo", "cargo", []string{"install", "bore-cli"}},
+		// Download pre-built binary (Linux amd64)
+		{"binary", "bash", []string{"-c", "curl -fsSL https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /tmp && sudo mv /tmp/bore /usr/local/bin/bore && chmod +x /usr/local/bin/bore"}},
+		// Homebrew (macOS)
+		{"brew", "brew", []string{"install", "bore-cli"}},
 	}
 
-	return nil
+	var lastErr error
+	for _, method := range installMethods {
+		cmd := exec.Command(method.cmd, method.args...)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		// Verify installation
+		if b.IsInstalled() {
+			return nil
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("installation failed: %w", lastErr)
+	}
+	return fmt.Errorf("installation failed: unknown error")
 }
 
 // Uninstall uninstalls bore

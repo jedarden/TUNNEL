@@ -27,7 +27,38 @@ func (z *ZeroTierProvider) Install() error {
 	if z.IsInstalled() {
 		return providers.ErrAlreadyInstalled
 	}
-	return fmt.Errorf("please install ZeroTier manually from https://www.zerotier.com/download")
+
+	// Try different installation methods
+	installMethods := []struct {
+		name string
+		cmd  string
+		args []string
+	}{
+		// Official ZeroTier install script (Linux)
+		{"script", "bash", []string{"-c", "curl -fsSL https://install.zerotier.com | sudo bash"}},
+		// apt (Debian/Ubuntu)
+		{"apt", "bash", []string{"-c", "curl -fsSL https://raw.githubusercontent.com/zerotier/ZeroTierOne/master/doc/contact%40zerotier.com.gpg | gpg --dearmor | sudo tee /usr/share/keyrings/zerotier-archive-keyring.gpg >/dev/null && echo 'deb [signed-by=/usr/share/keyrings/zerotier-archive-keyring.gpg] https://download.zerotier.com/debian/$(lsb_release -cs) $(lsb_release -cs) main' | sudo tee /etc/apt/sources.list.d/zerotier.list && sudo apt-get update && sudo apt-get install -y zerotier-one"}},
+		// Homebrew (macOS)
+		{"brew", "brew", []string{"install", "zerotier-one"}},
+	}
+
+	var lastErr error
+	for _, method := range installMethods {
+		cmd := exec.Command(method.cmd, method.args...)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		// Verify installation
+		if z.IsInstalled() {
+			return nil
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("installation failed: %w", lastErr)
+	}
+	return fmt.Errorf("installation failed: unknown error")
 }
 
 // Uninstall uninstalls ZeroTier

@@ -31,7 +31,38 @@ func (n *NgrokProvider) Install() error {
 	if n.IsInstalled() {
 		return providers.ErrAlreadyInstalled
 	}
-	return fmt.Errorf("please install ngrok manually from https://ngrok.com/download")
+
+	// Try different installation methods
+	installMethods := []struct {
+		name string
+		cmd  string
+		args []string
+	}{
+		// Direct binary download (Linux amd64)
+		{"binary", "bash", []string{"-c", "curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar -xz -C /tmp && sudo mv /tmp/ngrok /usr/local/bin/ngrok && chmod +x /usr/local/bin/ngrok"}},
+		// apt (via snap)
+		{"snap", "sudo", []string{"snap", "install", "ngrok"}},
+		// Homebrew (macOS)
+		{"brew", "brew", []string{"install", "ngrok/ngrok/ngrok"}},
+	}
+
+	var lastErr error
+	for _, method := range installMethods {
+		cmd := exec.Command(method.cmd, method.args...)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		// Verify installation
+		if n.IsInstalled() {
+			return nil
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("installation failed: %w", lastErr)
+	}
+	return fmt.Errorf("installation failed: unknown error")
 }
 
 // Uninstall uninstalls ngrok

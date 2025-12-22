@@ -28,8 +28,38 @@ func (t *TailscaleProvider) Install() error {
 	if t.IsInstalled() {
 		return providers.ErrAlreadyInstalled
 	}
-	// Installation should be done manually or via package manager
-	return fmt.Errorf("please install Tailscale manually from https://tailscale.com/download")
+
+	// Try different installation methods
+	installMethods := []struct {
+		name string
+		cmd  string
+		args []string
+	}{
+		// Official Tailscale install script (Linux)
+		{"script", "bash", []string{"-c", "curl -fsSL https://tailscale.com/install.sh | sh"}},
+		// apt (Debian/Ubuntu)
+		{"apt", "bash", []string{"-c", "curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null && curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list && sudo apt-get update && sudo apt-get install -y tailscale"}},
+		// Homebrew (macOS)
+		{"brew", "brew", []string{"install", "tailscale"}},
+	}
+
+	var lastErr error
+	for _, method := range installMethods {
+		cmd := exec.Command(method.cmd, method.args...)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		// Verify installation
+		if t.IsInstalled() {
+			return nil
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("installation failed: %w", lastErr)
+	}
+	return fmt.Errorf("installation failed: unknown error")
 }
 
 // Uninstall uninstalls Tailscale

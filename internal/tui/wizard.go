@@ -49,6 +49,8 @@ type Wizard struct {
 	height          int
 	cancelled       bool
 	completed       bool
+	installing      bool
+	installStatus   string
 }
 
 // WizardCompleteMsg is sent when the wizard completes
@@ -61,6 +63,17 @@ type WizardCompleteMsg struct {
 
 // WizardCancelMsg is sent when the wizard is cancelled
 type WizardCancelMsg struct{}
+
+// WizardInstallMsg is sent to trigger installation
+type WizardInstallMsg struct {
+	ProviderName string
+}
+
+// WizardInstallCompleteMsg is sent when installation completes
+type WizardInstallCompleteMsg struct {
+	Success bool
+	Error   error
+}
 
 // NewWizard creates a new connection wizard for a provider
 func NewWizard(reg *registry.Registry, providerName string) *Wizard {
@@ -153,6 +166,11 @@ func (w *Wizard) Init() tea.Cmd {
 func (w *Wizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Don't process keys while installing
+		if w.installing {
+			return w, nil
+		}
+
 		// Clear error on any key press
 		if w.errorMsg != "" && msg.String() != "enter" {
 			w.errorMsg = ""
@@ -191,13 +209,30 @@ func (w *Wizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "c":
-			// Connect
+			// Connect (or install first if needed)
 			return w, w.connect()
+
+		case "i":
+			// Manual install trigger
+			if w.provider != nil && !w.provider.IsInstalled() {
+				return w, w.installProvider()
+			}
 
 		case "q":
 			w.cancelled = true
 			return w, func() tea.Msg { return WizardCancelMsg{} }
 		}
+
+	case WizardInstallCompleteMsg:
+		w.installing = false
+		if msg.Success {
+			w.successMsg = w.providerName + " installed successfully!"
+			w.installStatus = ""
+		} else {
+			w.errorMsg = fmt.Sprintf("Installation failed: %v", msg.Error)
+			w.installStatus = ""
+		}
+		return w, nil
 	}
 
 	return w, nil
@@ -238,6 +273,34 @@ func (w *Wizard) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return w, nil
 }
 
+// installProvider installs the provider dependency
+func (w *Wizard) installProvider() tea.Cmd {
+	w.installing = true
+	w.installStatus = "Installing " + w.providerName + "..."
+
+	return func() tea.Msg {
+		if w.provider == nil {
+			return WizardInstallCompleteMsg{
+				Success: false,
+				Error:   fmt.Errorf("provider not found"),
+			}
+		}
+
+		err := w.provider.Install()
+		if err != nil {
+			return WizardInstallCompleteMsg{
+				Success: false,
+				Error:   err,
+			}
+		}
+
+		return WizardInstallCompleteMsg{
+			Success: true,
+			Error:   nil,
+		}
+	}
+}
+
 // connect attempts to connect using the configured settings
 func (w *Wizard) connect() tea.Cmd {
 	return func() tea.Msg {
@@ -260,12 +323,15 @@ func (w *Wizard) connect() tea.Cmd {
 			}
 		}
 
-		// Check if installed
+		// Check if installed - auto-install if not
 		if !w.provider.IsInstalled() {
-			return WizardCompleteMsg{
-				Success:      false,
-				ProviderName: w.providerName,
-				Error:        fmt.Errorf("%s is not installed. Please install it first using your package manager", w.providerName),
+			// Try to install automatically
+			if err := w.provider.Install(); err != nil {
+				return WizardCompleteMsg{
+					Success:      false,
+					ProviderName: w.providerName,
+					Error:        fmt.Errorf("auto-install failed: %w. Press 'i' to retry installation", err),
+				}
 			}
 		}
 
@@ -378,6 +444,14 @@ func (w *Wizard) View() string {
 	content.WriteString(TitleStyle.Render(title))
 	content.WriteString("\n\n")
 
+	// Show installation status if installing
+	if w.installing {
+		content.WriteString(InfoStyle.Render("⏳ " + w.installStatus))
+		content.WriteString("\n")
+		content.WriteString(HelpDescStyle.Render("Please wait..."))
+		content.WriteString("\n\n")
+	}
+
 	// Provider status
 	if w.provider != nil {
 		var status string
@@ -386,7 +460,7 @@ func (w *Wizard) View() string {
 		} else if w.provider.IsInstalled() {
 			status = StatusReadyStyle.Render(IconReady + " Installed & Ready")
 		} else {
-			status = StatusStoppedStyle.Render(IconStopped + " Not Installed")
+			status = StatusStoppedStyle.Render(IconStopped + " Not Installed") + " " + HelpDescStyle.Render("(press 'i' to install or 'c' to auto-install)")
 		}
 		content.WriteString(status)
 		content.WriteString("\n\n")
@@ -526,7 +600,11 @@ func (w *Wizard) renderCompact() string {
 func (w *Wizard) renderHelp() string {
 	var help []string
 
-	if w.editing {
+	if w.installing {
+		help = []string{
+			HelpDescStyle.Render("Installing... please wait"),
+		}
+	} else if w.editing {
 		help = []string{
 			HelpKeyStyle.Render("Enter") + HelpDescStyle.Render(" save"),
 			HelpKeyStyle.Render("Esc") + HelpDescStyle.Render(" cancel"),
@@ -536,8 +614,12 @@ func (w *Wizard) renderHelp() string {
 			HelpKeyStyle.Render("↑/↓") + HelpDescStyle.Render(" navigate"),
 			HelpKeyStyle.Render("Enter") + HelpDescStyle.Render(" edit"),
 			HelpKeyStyle.Render("c") + HelpDescStyle.Render(" connect"),
-			HelpKeyStyle.Render("Esc") + HelpDescStyle.Render(" cancel"),
 		}
+		// Show install option if not installed
+		if w.provider != nil && !w.provider.IsInstalled() {
+			help = append(help, HelpKeyStyle.Render("i")+HelpDescStyle.Render(" install"))
+		}
+		help = append(help, HelpKeyStyle.Render("Esc")+HelpDescStyle.Render(" cancel"))
 	}
 
 	return lipgloss.JoinHorizontal(
