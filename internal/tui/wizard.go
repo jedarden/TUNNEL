@@ -358,13 +358,13 @@ func (w *Wizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleEditMode handles keyboard input while editing a field
 func (w *Wizard) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	switch msg.Type {
+	case tea.KeyEscape:
 		// Cancel editing
 		w.editing = false
 		w.editBuffer = ""
 
-	case "enter":
+	case tea.KeyEnter:
 		// Save the edit
 		w.fields[w.selectedField].Value = w.editBuffer
 		w.editing = false
@@ -374,17 +374,24 @@ func (w *Wizard) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			w.selectedField++
 		}
 
-	case "backspace":
+	case tea.KeyBackspace:
 		if len(w.editBuffer) > 0 {
 			w.editBuffer = w.editBuffer[:len(w.editBuffer)-1]
 		}
 
+	case tea.KeySpace:
+		w.editBuffer += " "
+
+	case tea.KeyRunes:
+		// Handle regular text input AND pasted text
+		// msg.Runes contains all characters (works for both typing and pasting)
+		w.editBuffer += string(msg.Runes)
+
 	default:
-		// Add character to buffer
-		if len(msg.String()) == 1 {
-			w.editBuffer += msg.String()
-		} else if msg.Type == tea.KeySpace {
-			w.editBuffer += " "
+		// Handle any other printable input (fallback)
+		s := msg.String()
+		if len(s) > 0 && s != "ctrl+v" && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+") {
+			w.editBuffer += s
 		}
 	}
 
