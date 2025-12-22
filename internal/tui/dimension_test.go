@@ -100,7 +100,7 @@ func TestIsTiny(t *testing.T) {
 
 // TestDashboardRendersDimensions tests Dashboard rendering at all dimensions
 func TestDashboardRendersDimensions(t *testing.T) {
-	dashboard := NewDashboard(nil, nil)
+	dashboard := NewDashboard(nil, nil, nil)
 
 	for _, dim := range testDimensions {
 		t.Run(dim.Name, func(t *testing.T) {
@@ -328,7 +328,7 @@ func TestHelpOverlayRenders(t *testing.T) {
 
 // TestDashboardNoConnectionsRenders verifies empty state rendering
 func TestDashboardNoConnectionsRenders(t *testing.T) {
-	dashboard := NewDashboard(nil, nil)
+	dashboard := NewDashboard(nil, nil, nil)
 
 	for _, dim := range testDimensions {
 		t.Run(dim.Name, func(t *testing.T) {
@@ -473,7 +473,7 @@ func TestHelpToggle(t *testing.T) {
 
 // TestDashboardNavigation verifies dashboard list navigation
 func TestDashboardNavigation(t *testing.T) {
-	dashboard := NewDashboard(nil, nil)
+	dashboard := NewDashboard(nil, nil, nil)
 	dashboard.SetSize(80, 24)
 
 	initialSelection := dashboard.selectedAction

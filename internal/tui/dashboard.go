@@ -38,12 +38,13 @@ type Dashboard struct {
 	height         int
 
 	// Dependencies
-	registry *registry.Registry
-	manager  *core.DefaultConnectionManager
+	registry        *registry.Registry
+	manager         *core.DefaultConnectionManager
+	instanceManager *registry.InstanceManager
 }
 
 // NewDashboard creates a new dashboard instance
-func NewDashboard(reg *registry.Registry, mgr *core.DefaultConnectionManager) *Dashboard {
+func NewDashboard(reg *registry.Registry, mgr *core.DefaultConnectionManager, instanceMgr *registry.InstanceManager) *Dashboard {
 	d := &Dashboard{
 		connections: []Connection{},
 		quickActions: []string{
@@ -59,11 +60,12 @@ func NewDashboard(reg *registry.Registry, mgr *core.DefaultConnectionManager) *D
 			{Name: "Container", Status: "ready", Info: "Docker available"},
 			{Name: "Network", Status: "connected", Info: "eth0 up"},
 		},
-		selectedAction: 0,
-		width:          80,
-		height:         24,
-		registry:       reg,
-		manager:        mgr,
+		selectedAction:  0,
+		width:           80,
+		height:          24,
+		registry:        reg,
+		manager:         mgr,
+		instanceManager: instanceMgr,
 	}
 
 	// Load initial connections
@@ -77,18 +79,89 @@ func (d *Dashboard) Init() tea.Cmd {
 	return nil
 }
 
-// RefreshConnections populates connections from the registry
+// RefreshConnections populates connections from the registry and instance manager
 func (d *Dashboard) RefreshConnections() {
 	if d.registry == nil {
 		return
 	}
 
-	// Get connected providers from registry
+	connections := make([]Connection, 0)
+
+	// First, get connections from instance manager (multi-instance support)
+	if d.instanceManager != nil {
+		instances := d.instanceManager.ListInstances()
+		for _, instance := range instances {
+			status := instance.GetStatus()
+			icon := IconStopped
+			displayStatus := "disconnected"
+
+			switch status {
+			case "connected":
+				icon = IconConnected
+				displayStatus = "connected"
+			case "connecting":
+				icon = IconReady
+				displayStatus = "connecting"
+			case "error":
+				icon = IconCross
+				displayStatus = "error"
+			default:
+				icon = IconReady
+				displayStatus = "ready"
+			}
+
+			// Get connection info if available
+			ip := "-"
+			upload := "0 KB/s"
+			download := "0 KB/s"
+
+			if instance.IsConnected() {
+				connInfo, err := instance.GetConnectionInfo()
+				if err == nil && connInfo != nil {
+					ip = connInfo.LocalIP
+				}
+
+				// Get health status for metrics
+				health, err := instance.Provider.HealthCheck()
+				if err == nil && health != nil {
+					if health.BytesSent > 0 {
+						upload = fmt.Sprintf("%.2f MB", float64(health.BytesSent)/(1024*1024))
+					}
+					if health.BytesReceived > 0 {
+						download = fmt.Sprintf("%.2f MB", float64(health.BytesReceived)/(1024*1024))
+					}
+				}
+			}
+
+			conn := Connection{
+				ID:       instance.ID,
+				Method:   instance.DisplayName,
+				Status:   displayStatus,
+				IP:       ip,
+				Upload:   upload,
+				Download: download,
+				Icon:     icon,
+			}
+			connections = append(connections, conn)
+		}
+	}
+
+	// Then get connected providers from registry (singleton providers)
 	connectedProviders := d.registry.GetConnectedProviders()
 
-	// Convert to Connection structs for display
-	connections := make([]Connection, 0, len(connectedProviders))
 	for _, provider := range connectedProviders {
+		// Check if this provider is already represented by an instance
+		alreadyAdded := false
+		for _, conn := range connections {
+			if conn.Method == provider.Name() || conn.ID == provider.Name() {
+				alreadyAdded = true
+				break
+			}
+		}
+		if alreadyAdded {
+			continue
+		}
+
 		connInfo, err := provider.GetConnectionInfo()
 		if err != nil {
 			continue
@@ -126,6 +199,18 @@ func (d *Dashboard) RefreshConnections() {
 	for _, provider := range installedProviders {
 		if provider.IsConnected() {
 			continue // Already added above
+		}
+
+		// Check if already represented by an instance
+		alreadyAdded := false
+		for _, conn := range connections {
+			if conn.Method == provider.Name() || conn.ID == provider.Name() {
+				alreadyAdded = true
+				break
+			}
+		}
+		if alreadyAdded {
+			continue
 		}
 
 		conn := Connection{

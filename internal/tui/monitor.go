@@ -37,15 +37,16 @@ type Monitor struct {
 	autoRefreshTicker *time.Ticker
 
 	// Dependencies
-	registry *registry.Registry
-	manager  *core.DefaultConnectionManager
+	registry        *registry.Registry
+	manager         *core.DefaultConnectionManager
+	instanceManager *registry.InstanceManager
 }
 
 // TickMsg is sent periodically to trigger auto-refresh
 type TickMsg time.Time
 
 // NewMonitor creates a new monitor instance
-func NewMonitor(reg *registry.Registry, mgr *core.DefaultConnectionManager) *Monitor {
+func NewMonitor(reg *registry.Registry, mgr *core.DefaultConnectionManager, instanceMgr *registry.InstanceManager) *Monitor {
 	return &Monitor{
 		connections:     []MonitorConnection{},
 		selectedIndex:   0,
@@ -56,6 +57,7 @@ func NewMonitor(reg *registry.Registry, mgr *core.DefaultConnectionManager) *Mon
 		height:          24,
 		registry:        reg,
 		manager:         mgr,
+		instanceManager: instanceMgr,
 	}
 }
 
@@ -134,12 +136,80 @@ func (m *Monitor) refresh() tea.Cmd {
 	}
 }
 
-// RefreshConnections updates the connection list from the manager and registry
+// RefreshConnections updates the connection list from the manager, registry, and instance manager
 func (m *Monitor) RefreshConnections() {
 	m.lastRefresh = time.Now()
 
 	if m.registry == nil {
 		return
+	}
+
+	connections := make([]MonitorConnection, 0)
+	addedIDs := make(map[string]bool)
+
+	// First, add connections from instance manager (multi-instance support)
+	if m.instanceManager != nil {
+		instances := m.instanceManager.ListInstances()
+		for _, instance := range instances {
+			status := instance.GetStatus()
+			health := "healthy"
+
+			switch status {
+			case "connected":
+				health = "healthy"
+			case "connecting":
+				health = "degraded"
+			case "error":
+				health = "failed"
+			default:
+				health = "unknown"
+			}
+
+			var latency time.Duration
+			var bytesSent, bytesReceived int64
+			var uptime time.Duration
+			localIP := "-"
+			remoteIP := "-"
+
+			if instance.IsConnected() {
+				connInfo, err := instance.GetConnectionInfo()
+				if err == nil && connInfo != nil {
+					localIP = connInfo.LocalIP
+					remoteIP = connInfo.RemoteIP
+					if !connInfo.ConnectedAt.IsZero() {
+						uptime = time.Since(connInfo.ConnectedAt)
+					}
+				}
+
+				// Get health status for metrics
+				healthStatus, err := instance.Provider.HealthCheck()
+				if err == nil && healthStatus != nil {
+					if !healthStatus.Healthy {
+						health = "failed"
+					}
+					latency = healthStatus.Latency
+					bytesSent = int64(healthStatus.BytesSent)
+					bytesReceived = int64(healthStatus.BytesReceived)
+				}
+			}
+
+			monConn := MonitorConnection{
+				ID:            instance.ID,
+				Method:        instance.DisplayName,
+				Status:        status,
+				Latency:       latency,
+				BytesSent:     bytesSent,
+				BytesReceived: bytesReceived,
+				Uptime:        uptime,
+				LocalIP:       localIP,
+				RemoteIP:      remoteIP,
+				Health:        health,
+			}
+
+			connections = append(connections, monConn)
+			addedIDs[instance.ID] = true
+			addedIDs[instance.ProviderName] = true
+		}
 	}
 
 	// Get connections from manager if available
@@ -151,14 +221,12 @@ func (m *Monitor) RefreshConnections() {
 		}
 	}
 
-	// Get connected providers from registry
-	connectedProviders := m.registry.GetConnectedProviders()
-
-	connections := make([]MonitorConnection, 0)
-
-	// First, add connections from manager (these have detailed metrics)
+	// Add connections from manager (these have detailed metrics)
 	managerConnMap := make(map[string]*core.Connection)
 	for _, conn := range managerConns {
+		if addedIDs[conn.ID] || addedIDs[conn.Method] {
+			continue
+		}
 		managerConnMap[conn.Method] = conn
 
 		health := m.determineHealth(conn)
@@ -182,12 +250,17 @@ func (m *Monitor) RefreshConnections() {
 		monConn.BytesReceived = received
 
 		connections = append(connections, monConn)
+		addedIDs[conn.ID] = true
+		addedIDs[conn.Method] = true
 	}
 
-	// Then add connected providers not in manager
+	// Get connected providers from registry
+	connectedProviders := m.registry.GetConnectedProviders()
+
+	// Add connected providers not already added
 	for _, provider := range connectedProviders {
-		// Skip if already added from manager
-		if _, exists := managerConnMap[provider.Name()]; exists {
+		// Skip if already added
+		if addedIDs[provider.Name()] {
 			continue
 		}
 

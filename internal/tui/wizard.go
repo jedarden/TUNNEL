@@ -35,25 +35,27 @@ type WizardField struct {
 
 // Wizard is the connection configuration wizard
 type Wizard struct {
-	provider      providers.Provider
-	providerName  string
-	registry      *registry.Registry
-	fields        []WizardField
-	selectedField int
-	editing       bool
-	editBuffer    string
-	errorMsg      string
-	successMsg    string
-	width         int
-	height        int
-	cancelled     bool
-	completed     bool
+	provider        providers.Provider
+	providerName    string
+	registry        *registry.Registry
+	instanceManager *registry.InstanceManager
+	fields          []WizardField
+	selectedField   int
+	editing         bool
+	editBuffer      string
+	errorMsg        string
+	successMsg      string
+	width           int
+	height          int
+	cancelled       bool
+	completed       bool
 }
 
 // WizardCompleteMsg is sent when the wizard completes
 type WizardCompleteMsg struct {
 	Success      bool
 	ProviderName string
+	InstanceID   string
 	Error        error
 }
 
@@ -83,6 +85,13 @@ func NewWizard(reg *registry.Registry, providerName string) *Wizard {
 	// Set up fields based on provider type
 	w.setupFields()
 
+	return w
+}
+
+// NewWizardWithInstanceManager creates a wizard with instance manager support
+func NewWizardWithInstanceManager(reg *registry.Registry, instanceMgr *registry.InstanceManager, providerName string) *Wizard {
+	w := NewWizard(reg, providerName)
+	w.instanceManager = instanceMgr
 	return w
 }
 
@@ -266,6 +275,9 @@ func (w *Wizard) connect() tea.Cmd {
 			Extra: make(map[string]string),
 		}
 
+		// Get display name from hostname field or generate one
+		displayName := ""
+
 		for _, field := range w.fields {
 			if field.Value == "" {
 				continue
@@ -291,13 +303,44 @@ func (w *Wizard) connect() tea.Cmd {
 				}
 			case "server":
 				config.RemoteHost = field.Value
+			case "hostname":
+				displayName = field.Value
 			default:
 				// Store in Extra
 				config.Extra[field.Name] = field.Value
 			}
 		}
 
-		// Save config to provider
+		// If instance manager is available, create a new instance
+		if w.instanceManager != nil {
+			instance, err := w.instanceManager.CreateInstance(w.providerName, displayName, config)
+			if err != nil {
+				return WizardCompleteMsg{
+					Success:      false,
+					ProviderName: w.providerName,
+					Error:        fmt.Errorf("failed to create instance: %w", err),
+				}
+			}
+
+			// Connect the instance
+			if err := instance.Connect(); err != nil {
+				return WizardCompleteMsg{
+					Success:      false,
+					ProviderName: w.providerName,
+					InstanceID:   instance.ID,
+					Error:        fmt.Errorf("connection failed: %w", err),
+				}
+			}
+
+			return WizardCompleteMsg{
+				Success:      true,
+				ProviderName: w.providerName,
+				InstanceID:   instance.ID,
+				Error:        nil,
+			}
+		}
+
+		// Fallback: direct provider connection (singleton mode)
 		if err := w.provider.Configure(config); err != nil {
 			return WizardCompleteMsg{
 				Success:      false,
@@ -306,7 +349,6 @@ func (w *Wizard) connect() tea.Cmd {
 			}
 		}
 
-		// Attempt to connect
 		if err := w.provider.Connect(); err != nil {
 			return WizardCompleteMsg{
 				Success:      false,

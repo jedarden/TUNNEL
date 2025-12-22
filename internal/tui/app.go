@@ -10,6 +10,12 @@ import (
 	"github.com/jedarden/tunnel/pkg/config"
 )
 
+// InstanceCreatedMsg is sent when a new instance is created
+type InstanceCreatedMsg struct {
+	InstanceID   string
+	ProviderName string
+}
+
 // ViewMode represents the current active view
 type ViewMode int
 
@@ -32,9 +38,10 @@ type App struct {
 	errorTimer  int
 
 	// Dependencies
-	registry  *registry.Registry
-	manager   *core.DefaultConnectionManager
-	appConfig *config.Config
+	registry        *registry.Registry
+	manager         *core.DefaultConnectionManager
+	appConfig       *config.Config
+	instanceManager *registry.InstanceManager
 
 	// Sub-models
 	dashboard *Dashboard
@@ -70,20 +77,24 @@ func NewApp(reg *registry.Registry, mgr *core.DefaultConnectionManager, cfg *con
 	// Get manager config from manager
 	mgrConfig := core.DefaultManagerConfig()
 
+	// Create instance manager for multi-instance support
+	instanceMgr := registry.NewInstanceManager(reg)
+
 	return &App{
-		currentView: ViewDashboard,
-		registry:    reg,
-		manager:     mgr,
-		appConfig:   cfg,
-		dashboard:   NewDashboard(reg, mgr),
-		browser:     NewBrowser(reg),
-		config:      NewConfig(cfg, mgrConfig),
-		monitor:     NewMonitor(reg, mgr),
-		logs:        NewLogs(reg),
-		help:        NewHelp(),
-		showHelp:    false,
-		width:       80,
-		height:      24,
+		currentView:     ViewDashboard,
+		registry:        reg,
+		manager:         mgr,
+		appConfig:       cfg,
+		instanceManager: instanceMgr,
+		dashboard:       NewDashboard(reg, mgr, instanceMgr),
+		browser:         NewBrowser(reg),
+		config:          NewConfig(cfg, mgrConfig),
+		monitor:         NewMonitor(reg, mgr, instanceMgr),
+		logs:            NewLogs(reg),
+		help:            NewHelp(),
+		showHelp:        false,
+		width:           80,
+		height:          24,
 	}
 }
 
@@ -220,8 +231,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case OpenWizardMsg:
-		// Create and show the wizard for the selected provider
-		a.wizard = NewWizard(a.registry, msg.ProviderName)
+		// Create and show the wizard for the selected provider with instance manager support
+		a.wizard = NewWizardWithInstanceManager(a.registry, a.instanceManager, msg.ProviderName)
 		a.wizard.SetSize(a.width, a.height)
 		a.showWizard = true
 		return a, nil
