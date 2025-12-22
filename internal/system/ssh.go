@@ -62,7 +62,7 @@ func getSSHProcessInfo() (int, string) {
 		output, err := cmd.Output()
 		if err == nil && len(output) > 0 {
 			var pid int
-			fmt.Sscanf(string(output), "%d", &pid)
+			_, _ = fmt.Sscanf(string(output), "%d", &pid)
 			return pid, name
 		}
 	}
@@ -107,7 +107,7 @@ func readSSHConfigPort() (int, error) {
 			line := strings.TrimSpace(scanner.Text())
 			if strings.HasPrefix(line, "Port ") {
 				var port int
-				fmt.Sscanf(line, "Port %d", &port)
+				_, _ = fmt.Sscanf(line, "Port %d", &port)
 				if port > 0 {
 					return port, nil
 				}

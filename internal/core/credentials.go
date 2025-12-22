@@ -398,7 +398,7 @@ func NewCredentialStore(storeType, serviceName, baseDir, passphrase string) (Cre
 			}
 			return NewFileStore(baseDir, passphrase)
 		}
-		store.Delete("test", testKey)
+		_ = store.Delete("test", testKey)
 		return store, nil
 
 	case "file":

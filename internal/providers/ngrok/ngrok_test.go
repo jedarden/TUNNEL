@@ -168,7 +168,7 @@ func TestGetTunnels_ErrorHandling(t *testing.T) {
 			setupMock: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusOK)
-					w.Write([]byte("invalid json"))
+					_, _ = w.Write([]byte("invalid json"))
 				}))
 			},
 			closeMock: true,
@@ -182,7 +182,7 @@ func TestGetTunnels_ErrorHandling(t *testing.T) {
 					resp := NgrokAPIResponse{
 						Tunnels: []NgrokTunnel{},
 					}
-					json.NewEncoder(w).Encode(resp)
+					_ = json.NewEncoder(w).Encode(resp)
 				}))
 			},
 			closeMock: true,
@@ -202,7 +202,7 @@ func TestGetTunnels_ErrorHandling(t *testing.T) {
 							},
 						},
 					}
-					json.NewEncoder(w).Encode(resp)
+					_ = json.NewEncoder(w).Encode(resp)
 				}))
 			},
 			closeMock: true,

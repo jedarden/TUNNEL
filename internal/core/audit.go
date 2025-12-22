@@ -110,9 +110,9 @@ func (al *AuditLogger) Log(event AuditEvent) error {
 			event.EventType, event.Method, event.User, event.SourceIP, event.Success)
 
 		if event.Success {
-			al.syslogWriter.Info(msg)
+			_ = al.syslogWriter.Info(msg)
 		} else {
-			al.syslogWriter.Warning(msg)
+			_ = al.syslogWriter.Warning(msg)
 		}
 	}
 

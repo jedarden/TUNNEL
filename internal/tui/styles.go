@@ -82,13 +82,13 @@ var (
 			Padding(0, 1).
 			Bold(true)
 
-	StatusConnectedStyle = StatusStyle.Copy().
+	StatusConnectedStyle = StatusStyle.
 				Foreground(StatusConnected)
 
-	StatusReadyStyle = StatusStyle.Copy().
+	StatusReadyStyle = StatusStyle.
 				Foreground(StatusReady)
 
-	StatusStoppedStyle = StatusStyle.Copy().
+	StatusStoppedStyle = StatusStyle.
 				Foreground(ColorDanger)
 
 	// Header styles

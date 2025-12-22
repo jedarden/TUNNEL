@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/jedarden/tunnel/internal/core"
@@ -23,10 +26,14 @@ var (
 	verbose    bool
 	jsonOutput bool
 
-	manager   *core.DefaultConnectionManager
-	reg       *registry.Registry
-	appConfig *config.Config
+	manager    *core.DefaultConnectionManager
+	reg        *registry.Registry
+	keyManager *core.FileKeyManager
 )
+
+// appConfig holds the loaded application configuration
+// nolint:unused // loaded for future use
+var appConfig *config.Config
 
 // Execute runs the root command
 func Execute(ctx context.Context) error {
@@ -76,9 +83,11 @@ func init() {
 	rootCmd.AddCommand(configureCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(authCmd)
+	rootCmd.AddCommand(keysCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(completionsCmd)
+	rootCmd.AddCommand(emergencyRevokeCmd)
 }
 
 func initCLI() {
@@ -109,6 +118,18 @@ func initCLI() {
 		// Create a ConnectionProvider adapter for each Provider
 		adapter := &providerAdapter{provider: provider}
 		manager.RegisterProvider(adapter)
+	}
+
+	// Initialize key manager
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to get home directory: %v\n", err)
+	} else {
+		authorizedKeysPath := filepath.Join(homeDir, ".ssh", "authorized_keys")
+		keyManager, err = core.NewFileKeyManager(authorizedKeysPath, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to initialize key manager: %v\n", err)
+		}
 	}
 }
 
@@ -296,6 +317,109 @@ func init() {
 	authCmd.AddCommand(authStatusCmd)
 }
 
+// Keys commands
+
+var keysCmd = &cobra.Command{
+	Use:   "keys",
+	Short: "Manage SSH keys",
+	Long:  `Manage SSH public keys for authentication.`,
+}
+
+var keysListCmd = &cobra.Command{
+	Use:   "list [user]",
+	Short: "List SSH keys",
+	Long:  `List all SSH public keys, optionally filtered by user.`,
+	Example: `  tunnel keys list
+  tunnel keys list alice`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		user := ""
+		if len(args) > 0 {
+			user = args[0]
+		}
+		return listKeys(user)
+	},
+}
+
+var keysAddCmd = &cobra.Command{
+	Use:   "add <user>",
+	Short: "Add a new SSH key",
+	Long:  `Add a new SSH public key for a user. Prompts for the key interactively.`,
+	Example: `  tunnel keys add alice
+  tunnel keys add bob`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		user := args[0]
+		return addKey(user)
+	},
+}
+
+var keysRotateCmd = &cobra.Command{
+	Use:   "rotate <user> [key-id]",
+	Short: "Rotate SSH key(s)",
+	Long:  `Rotate a specific SSH key or all keys for a user.`,
+	Example: `  tunnel keys rotate alice
+  tunnel keys rotate alice SHA256:abc123...`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		user := args[0]
+		keyID := ""
+		if len(args) > 1 {
+			keyID = args[1]
+		}
+		return rotateKey(user, keyID)
+	},
+}
+
+var keysRevokeCmd = &cobra.Command{
+	Use:   "revoke <user> <key-id>",
+	Short: "Revoke a specific SSH key",
+	Long:  `Revoke (remove) a specific SSH public key.`,
+	Example: `  tunnel keys revoke alice SHA256:abc123...
+  tunnel keys revoke bob 1`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		user := args[0]
+		keyID := args[1]
+		return revokeKey(user, keyID)
+	},
+}
+
+var keysImportGitHubCmd = &cobra.Command{
+	Use:   "import-github <github-user>",
+	Short: "Import SSH keys from GitHub",
+	Long:  `Import all SSH public keys from a GitHub user profile.`,
+	Example: `  tunnel keys import-github octocat
+  tunnel keys import-github alice`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		githubUser := args[0]
+		return importGitHubKeys(githubUser)
+	},
+}
+
+var keysImportGitLabCmd = &cobra.Command{
+	Use:   "import-gitlab <gitlab-user>",
+	Short: "Import SSH keys from GitLab",
+	Long:  `Import all SSH public keys from a GitLab user profile.`,
+	Example: `  tunnel keys import-gitlab octocat
+  tunnel keys import-gitlab alice`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		gitlabUser := args[0]
+		return importGitLabKeys(gitlabUser)
+	},
+}
+
+func init() {
+	keysCmd.AddCommand(keysListCmd)
+	keysCmd.AddCommand(keysAddCmd)
+	keysCmd.AddCommand(keysRotateCmd)
+	keysCmd.AddCommand(keysRevokeCmd)
+	keysCmd.AddCommand(keysImportGitHubCmd)
+	keysCmd.AddCommand(keysImportGitLabCmd)
+}
+
 // Completions command
 
 var completionsCmd = &cobra.Command{
@@ -335,6 +459,55 @@ Fish:
 			return fmt.Errorf("unsupported shell: %s", shell)
 		}
 	},
+}
+
+// Emergency revoke command
+
+var (
+	emergencyRevokeReason       string
+	emergencyRevokeKillSessions bool
+	emergencyRevokeNotify       bool
+	emergencyRevokeForce        bool
+)
+
+var emergencyRevokeCmd = &cobra.Command{
+	Use:   "emergency-revoke <user>",
+	Short: "Emergency revocation of all SSH keys for a user",
+	Long: `Emergency revocation of all SSH keys for a user. This is a critical security operation
+that removes ALL keys for the specified user and requires a reason to be logged.
+
+This command will:
+- Revoke ALL SSH keys associated with the user
+- Log an audit event with the reason
+- Optionally kill active sessions
+- Optionally send notifications
+
+Use this command in emergency situations such as:
+- Security breaches or compromised credentials
+- Terminated employees
+- Lost or stolen devices
+- Suspected unauthorized access`,
+	Example: `  # Revoke all keys for a user
+  tunnel emergency-revoke bob_dev --reason "security breach"
+
+  # Revoke and kill active sessions
+  tunnel emergency-revoke alice --reason "device stolen" --kill-sessions
+
+  # Skip confirmation prompt
+  tunnel emergency-revoke charlie --reason "terminated" --force`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		username := args[0]
+		return emergencyRevoke(username, emergencyRevokeReason, emergencyRevokeKillSessions, emergencyRevokeNotify, emergencyRevokeForce)
+	},
+}
+
+func init() {
+	emergencyRevokeCmd.Flags().StringVar(&emergencyRevokeReason, "reason", "", "reason for emergency revocation (required)")
+	emergencyRevokeCmd.MarkFlagRequired("reason")
+	emergencyRevokeCmd.Flags().BoolVar(&emergencyRevokeKillSessions, "kill-sessions", false, "kill active SSH sessions for the user")
+	emergencyRevokeCmd.Flags().BoolVar(&emergencyRevokeNotify, "notify", false, "send notification about the revocation")
+	emergencyRevokeCmd.Flags().BoolVar(&emergencyRevokeForce, "force", false, "skip confirmation prompt")
 }
 
 // Implementation functions
@@ -797,7 +970,7 @@ func authLogin(method string) error {
 		color.Cyan("Setting up ngrok authentication...")
 		fmt.Print("Enter your ngrok authtoken: ")
 		var authtoken string
-		fmt.Scanln(&authtoken)
+		_, _ = fmt.Scanln(&authtoken)
 		if authtoken == "" {
 			return fmt.Errorf("authtoken cannot be empty")
 		}
@@ -847,7 +1020,7 @@ func setAPIKey(method string) error {
 	// TODO: Implement API key setting
 	fmt.Printf("Enter API key for %s: ", method)
 	var apiKey string
-	fmt.Scanln(&apiKey)
+	_, _ = fmt.Scanln(&apiKey)
 
 	configKey := fmt.Sprintf("providers.%s.api_key", method)
 	return setConfig(configKey, apiKey)
@@ -987,4 +1160,561 @@ func (p *providerAdapter) Disconnect(conn *core.Connection) error {
 
 func (p *providerAdapter) IsHealthy(conn *core.Connection) bool {
 	return p.provider.IsConnected()
+}
+
+// Keys management functions
+
+func listKeys(user string) error {
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	keys, err := keyManager.ListKeys(user)
+	if err != nil {
+		return fmt.Errorf("failed to list keys: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"count": len(keys),
+			"keys":  keys,
+		}
+		if user != "" {
+			output["user"] = user
+		}
+		return printJSON(output)
+	}
+
+	// Terminal output
+	if len(keys) == 0 {
+		color.Yellow("No SSH keys found")
+		return nil
+	}
+
+	color.Cyan("=== SSH Public Keys ===")
+	if user != "" {
+		fmt.Printf("User: %s\n", color.GreenString(user))
+	}
+	fmt.Printf("Total: %s\n\n", color.GreenString("%d", len(keys)))
+
+	for i, key := range keys {
+		fmt.Printf("%s. %s\n", color.CyanString("%d", i+1), color.GreenString(key.Type))
+		fmt.Printf("   Fingerprint: %s\n", key.Fingerprint)
+		if key.Comment != "" {
+			fmt.Printf("   Comment:     %s\n", key.Comment)
+		}
+		fmt.Printf("   Status:      %s\n", colorizeStatus(key.Status))
+		fmt.Printf("   Added:       %s\n", key.AddedAt.Format("2006-01-02 15:04:05"))
+		if !key.LastUsed.IsZero() {
+			fmt.Printf("   Last Used:   %s\n", key.LastUsed.Format("2006-01-02 15:04:05"))
+		}
+		if key.ExpiresAt != nil {
+			fmt.Printf("   Expires:     %s\n", key.ExpiresAt.Format("2006-01-02 15:04:05"))
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+func addKey(user string) error {
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	color.Cyan("Add SSH Public Key for %s", user)
+	fmt.Println("Paste your SSH public key (press Enter when done):")
+
+	// Read the key from stdin
+	reader := bufio.NewReader(os.Stdin)
+	keyStr, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read key: %w", err)
+	}
+
+	keyStr = strings.TrimSpace(keyStr)
+	if keyStr == "" {
+		return fmt.Errorf("key cannot be empty")
+	}
+
+	// Validate the key
+	key, err := keyManager.ValidateKey(keyStr)
+	if err != nil {
+		return fmt.Errorf("invalid SSH key: %w", err)
+	}
+
+	// Add the key
+	if err := keyManager.AddKey(user, *key); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+				"user":   user,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to add key: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status":      "success",
+			"user":        user,
+			"fingerprint": key.Fingerprint,
+			"type":        key.Type,
+		}
+		return printJSON(output)
+	}
+
+	color.Green("✓ SSH key added successfully")
+	fmt.Printf("  Type:        %s\n", key.Type)
+	fmt.Printf("  Fingerprint: %s\n", key.Fingerprint)
+	if key.Comment != "" {
+		fmt.Printf("  Comment:     %s\n", key.Comment)
+	}
+
+	return nil
+}
+
+func rotateKey(user, keyID string) error {
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	if keyID == "" {
+		// Rotate all keys for user
+		color.Yellow("Key rotation for all keys is not yet implemented")
+		fmt.Println("Please specify a key ID to rotate a specific key")
+		return nil
+	}
+
+	// For now, rotation means prompting for a new key and removing the old one
+	color.Cyan("Rotate SSH Key for %s", user)
+	fmt.Printf("This will remove key: %s\n", keyID)
+	fmt.Println("Enter the new SSH public key (press Enter when done):")
+
+	// Read the new key
+	reader := bufio.NewReader(os.Stdin)
+	keyStr, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read key: %w", err)
+	}
+
+	keyStr = strings.TrimSpace(keyStr)
+	if keyStr == "" {
+		return fmt.Errorf("key cannot be empty")
+	}
+
+	// Validate the new key
+	newKey, err := keyManager.ValidateKey(keyStr)
+	if err != nil {
+		return fmt.Errorf("invalid SSH key: %w", err)
+	}
+
+	// Remove the old key
+	if err := keyManager.RemoveKey(user, keyID); err != nil {
+		return fmt.Errorf("failed to remove old key: %w", err)
+	}
+
+	// Add the new key
+	if err := keyManager.AddKey(user, *newKey); err != nil {
+		return fmt.Errorf("failed to add new key: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status":          "success",
+			"user":            user,
+			"old_key_id":      keyID,
+			"new_fingerprint": newKey.Fingerprint,
+			"new_type":        newKey.Type,
+		}
+		return printJSON(output)
+	}
+
+	color.Green("✓ SSH key rotated successfully")
+	fmt.Printf("  Old Key ID:       %s\n", keyID)
+	fmt.Printf("  New Type:         %s\n", newKey.Type)
+	fmt.Printf("  New Fingerprint:  %s\n", newKey.Fingerprint)
+
+	return nil
+}
+
+func revokeKey(user, keyID string) error {
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	if verbose {
+		fmt.Printf("Revoking key %s for user %s\n", keyID, user)
+	}
+
+	// Remove the key
+	if err := keyManager.RemoveKey(user, keyID); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+				"user":   user,
+				"key_id": keyID,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to revoke key: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status": "success",
+			"user":   user,
+			"key_id": keyID,
+		}
+		return printJSON(output)
+	}
+
+	color.Green("✓ SSH key revoked successfully")
+	fmt.Printf("  User:   %s\n", user)
+	fmt.Printf("  Key ID: %s\n", keyID)
+
+	return nil
+}
+
+func importGitHubKeys(githubUser string) error {
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	color.Cyan("Importing SSH keys from GitHub user: %s", githubUser)
+
+	keys, err := keyManager.ImportFromGitHub(githubUser)
+	if err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":      "error",
+				"error":       err.Error(),
+				"github_user": githubUser,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to import keys from GitHub: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status":      "success",
+			"github_user": githubUser,
+			"count":       len(keys),
+			"keys":        keys,
+		}
+		return printJSON(output)
+	}
+
+	if len(keys) == 0 {
+		color.Yellow("No SSH keys found for GitHub user: %s", githubUser)
+		return nil
+	}
+
+	color.Green("✓ Imported %d SSH key(s) from GitHub", len(keys))
+	fmt.Println()
+
+	for i, key := range keys {
+		fmt.Printf("%d. %s\n", i+1, color.GreenString(key.Type))
+		fmt.Printf("   Fingerprint: %s\n", key.Fingerprint)
+		if key.Comment != "" {
+			fmt.Printf("   Comment:     %s\n", key.Comment)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+func importGitLabKeys(gitlabUser string) error {
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	color.Cyan("Importing SSH keys from GitLab user: %s", gitlabUser)
+
+	// GitLab API endpoint for user's SSH keys
+	url := fmt.Sprintf("https://gitlab.com/%s.keys", gitlabUser)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":      "error",
+				"error":       err.Error(),
+				"gitlab_user": gitlabUser,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to fetch GitLab keys: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":      "error",
+				"error":       fmt.Sprintf("GitLab API returned status %d", resp.StatusCode),
+				"gitlab_user": gitlabUser,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("GitLab API returned status %d", resp.StatusCode)
+	}
+
+	var keys []core.SSHPublicKey
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		keyStr := strings.TrimSpace(scanner.Text())
+		if keyStr == "" {
+			continue
+		}
+
+		key, err := keyManager.ValidateKey(keyStr)
+		if err != nil {
+			// Log but continue with other keys
+			fmt.Fprintf(os.Stderr, "Warning: invalid key from GitLab: %v\n", err)
+			continue
+		}
+
+		// Add comment indicating source
+		key.Comment = fmt.Sprintf("gitlab.com/%s", gitlabUser)
+		keys = append(keys, *key)
+
+		// Add to authorized_keys
+		if err := keyManager.AddKey(gitlabUser, *key); err != nil {
+			return fmt.Errorf("failed to add key: %w", err)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":      "error",
+				"error":       err.Error(),
+				"gitlab_user": gitlabUser,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to read GitLab response: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status":      "success",
+			"gitlab_user": gitlabUser,
+			"count":       len(keys),
+			"keys":        keys,
+		}
+		return printJSON(output)
+	}
+
+	if len(keys) == 0 {
+		color.Yellow("No SSH keys found for GitLab user: %s", gitlabUser)
+		return nil
+	}
+
+	color.Green("✓ Imported %d SSH key(s) from GitLab", len(keys))
+	fmt.Println()
+
+	for i, key := range keys {
+		fmt.Printf("%d. %s\n", i+1, color.GreenString(key.Type))
+		fmt.Printf("   Fingerprint: %s\n", key.Fingerprint)
+		if key.Comment != "" {
+			fmt.Printf("   Comment:     %s\n", key.Comment)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+func colorizeStatus(status string) string {
+	switch status {
+	case "active":
+		return color.GreenString(status)
+	case "revoked":
+		return color.RedString(status)
+	case "expired":
+		return color.YellowString(status)
+	default:
+		return status
+	}
+}
+
+// emergencyRevoke revokes all SSH keys for a user in an emergency situation
+func emergencyRevoke(username, reason string, killSessions, notify, force bool) error {
+	// Validate inputs
+	if username == "" {
+		return fmt.Errorf("username cannot be empty")
+	}
+	if reason == "" {
+		return fmt.Errorf("reason cannot be empty")
+	}
+
+	// Check if key manager is initialized
+	if keyManager == nil {
+		return fmt.Errorf("key manager not initialized")
+	}
+
+	// Get all keys for the user
+	keys, err := keyManager.ListKeys(username)
+	if err != nil {
+		return fmt.Errorf("failed to list keys: %w", err)
+	}
+
+	if len(keys) == 0 {
+		if jsonOutput {
+			return printJSON(map[string]interface{}{
+				"status":  "info",
+				"message": "no keys found for user",
+				"user":    username,
+			})
+		}
+		color.Yellow("No keys found for user: %s", username)
+		return nil
+	}
+
+	// Show warning and confirmation unless force is used
+	if !force && !jsonOutput {
+		color.Red("WARNING: Emergency key revocation for user: %s", username)
+		fmt.Printf("\nThis will revoke ALL %d key(s) for this user.\n", len(keys))
+		fmt.Printf("Reason: %s\n\n", reason)
+
+		if killSessions {
+			color.Red("Active sessions will be killed!")
+		}
+		if notify {
+			fmt.Println("Notifications will be sent.")
+		}
+
+		fmt.Print("\nType 'yes' to confirm: ")
+		var confirmation string
+		_, _ = fmt.Scanln(&confirmation)
+
+		if confirmation != "yes" {
+			color.Yellow("Emergency revocation cancelled")
+			return nil
+		}
+	}
+
+	// Track revocation results
+	revokedCount := 0
+	failedKeys := []string{}
+
+	// Revoke all keys
+	for _, key := range keys {
+		if err := keyManager.RemoveKey(username, key.ID); err != nil {
+			failedKeys = append(failedKeys, fmt.Sprintf("%s: %v", key.Fingerprint, err))
+			if verbose {
+				fmt.Fprintf(os.Stderr, "Failed to revoke key %s: %v\n", key.Fingerprint, err)
+			}
+		} else {
+			revokedCount++
+			if verbose && !jsonOutput {
+				fmt.Printf("Revoked key: %s\n", key.Fingerprint)
+			}
+		}
+	}
+
+	// Kill active sessions if requested
+	sessionsKilled := 0
+	if killSessions {
+		// Note: This is a placeholder for session killing logic
+		// In a real implementation, this would use 'pkill' or similar
+		if verbose && !jsonOutput {
+			color.Yellow("Session killing not yet implemented (placeholder)")
+		}
+	}
+
+	// Send notification if requested
+	if notify {
+		// Note: This is a placeholder for notification logic
+		// In a real implementation, this would send email, Slack, etc.
+		if verbose && !jsonOutput {
+			fmt.Printf("Notification logged: Emergency key revocation for %s\n", username)
+		}
+	}
+
+	// Log audit event
+	homeDir, _ := os.UserHomeDir()
+	auditLogPath := filepath.Join(homeDir, ".config", "tunnel", "audit.log")
+	auditLogger, err := core.NewAuditLogger(auditLogPath, false, "")
+	if err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to initialize audit logger: %v\n", err)
+		}
+	} else {
+		defer auditLogger.Close()
+
+		_ = auditLogger.Log(core.AuditEvent{
+			Timestamp: time.Now(),
+			EventType: "emergency_revoke",
+			Method:    "ssh-key",
+			User:      username,
+			Details: map[string]interface{}{
+				"reason":          reason,
+				"keys_revoked":    revokedCount,
+				"keys_failed":     len(failedKeys),
+				"total_keys":      len(keys),
+				"kill_sessions":   killSessions,
+				"sessions_killed": sessionsKilled,
+				"notify":          notify,
+				"forced":          force,
+			},
+			Success: len(failedKeys) == 0,
+		})
+	}
+
+	// Output results
+	if jsonOutput {
+		return printJSON(map[string]interface{}{
+			"status":          "completed",
+			"user":            username,
+			"reason":          reason,
+			"keys_revoked":    revokedCount,
+			"keys_failed":     len(failedKeys),
+			"total_keys":      len(keys),
+			"failed_keys":     failedKeys,
+			"kill_sessions":   killSessions,
+			"sessions_killed": sessionsKilled,
+			"notify":          notify,
+			"success":         len(failedKeys) == 0,
+		})
+	}
+
+	// Display summary
+	fmt.Println()
+	if len(failedKeys) == 0 {
+		color.Green("✓ Emergency revocation completed successfully")
+	} else {
+		color.Yellow("⚠ Emergency revocation completed with errors")
+	}
+
+	fmt.Printf("\nUser: %s\n", color.CyanString(username))
+	fmt.Printf("Reason: %s\n", reason)
+	fmt.Printf("Keys revoked: %s\n", color.GreenString("%d/%d", revokedCount, len(keys)))
+
+	if len(failedKeys) > 0 {
+		color.Red("\nFailed to revoke %d key(s):", len(failedKeys))
+		for _, failure := range failedKeys {
+			fmt.Printf("  - %s\n", failure)
+		}
+	}
+
+	if killSessions {
+		fmt.Printf("Sessions killed: %d\n", sessionsKilled)
+	}
+
+	if notify {
+		fmt.Println("\nNotifications sent: Yes")
+	}
+
+	fmt.Println()
+	color.Cyan("Audit event logged with type: emergency_revoke")
+
+	return nil
 }

@@ -57,7 +57,7 @@ func GetPublicIP() (string, error) {
 
 		if resp.StatusCode == 200 {
 			var ip string
-			fmt.Fscanf(resp.Body, "%s", &ip)
+			_, _ = fmt.Fscanf(resp.Body, "%s", &ip)
 			if net.ParseIP(ip) != nil {
 				return ip, nil
 			}

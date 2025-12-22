@@ -126,7 +126,7 @@ func (t *TailscaleProvider) GetConnectionInfo() (*providers.ConnectionInfo, erro
 		Extra:  make(map[string]interface{}),
 	}
 
-	if status.Self.TailscaleIPs != nil && len(status.Self.TailscaleIPs) > 0 {
+	if len(status.Self.TailscaleIPs) > 0 {
 		info.LocalIP = status.Self.TailscaleIPs[0]
 	}
 

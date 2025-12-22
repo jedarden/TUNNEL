@@ -44,11 +44,6 @@ type SwitchViewMsg struct {
 
 type ToggleHelpMsg struct{}
 
-type WindowSizeMsg struct {
-	width  int
-	height int
-}
-
 type RefreshConnectionsMsg struct{}
 
 // NewApp creates a new TUI application instance

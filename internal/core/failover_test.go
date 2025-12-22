@@ -136,7 +136,7 @@ func TestUnregisterPrimaryConnection(t *testing.T) {
 	fm.healthStatus[conn1.ID].IsHealthy = true
 	fm.healthStatus[conn2.ID].IsHealthy = true
 
-	fm.SetPrimary(conn1.ID)
+	_ = fm.SetPrimary(conn1.ID)
 
 	// Unregister primary connection
 	fm.UnregisterConnection(conn1.ID)

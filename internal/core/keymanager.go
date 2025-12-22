@@ -37,11 +37,25 @@ type KeyManager interface {
 
 	// Import
 	ImportFromGitHub(username string) ([]SSHPublicKey, error)
+	ImportFromGitLab(username string) ([]SSHPublicKey, error)
 	ImportFromURL(url string) (*SSHPublicKey, error)
 
 	// Validation
 	ValidateKey(key string) (*SSHPublicKey, error)
+	ValidateKeyStrength(key string) error
 	GetFingerprint(key string) (string, error)
+
+	// Key lifecycle management
+	RotateKey(username, oldKeyID string, newKey SSHPublicKey) error
+	CheckKeyExpiration() ([]SSHPublicKey, error)
+	CheckKeyAge(key SSHPublicKey) (bool, string)
+
+	// Bulk operations
+	BulkRevoke(username string, keyIDs []string) error
+	BulkRotate(username string, newKeys []SSHPublicKey) error
+
+	// Duplicate detection
+	IsDuplicate(fingerprint string) (bool, string, error)
 }
 
 // FileKeyManager implements KeyManager using authorized_keys file
@@ -145,7 +159,7 @@ func (km *FileKeyManager) AddKey(username string, key SSHPublicKey) error {
 
 	// Log audit event
 	if km.auditLogger != nil {
-		km.auditLogger.Log(AuditEvent{
+		_ = km.auditLogger.Log(AuditEvent{
 			Timestamp: time.Now(),
 			EventType: "key_added",
 			Method:    "ssh-key",
@@ -191,7 +205,7 @@ func (km *FileKeyManager) RemoveKey(username string, keyID string) error {
 
 	// Log audit event
 	if km.auditLogger != nil {
-		km.auditLogger.Log(AuditEvent{
+		_ = km.auditLogger.Log(AuditEvent{
 			Timestamp: time.Now(),
 			EventType: "key_removed",
 			Method:    "ssh-key",
@@ -256,7 +270,7 @@ func (km *FileKeyManager) ImportFromGitHub(username string) ([]SSHPublicKey, err
 
 	// Log audit event
 	if km.auditLogger != nil {
-		km.auditLogger.Log(AuditEvent{
+		_ = km.auditLogger.Log(AuditEvent{
 			Timestamp: time.Now(),
 			EventType: "keys_imported",
 			Method:    "github",
@@ -295,6 +309,315 @@ func (km *FileKeyManager) ImportFromURL(url string) (*SSHPublicKey, error) {
 	}
 
 	return key, nil
+}
+
+// ImportFromGitLab imports SSH keys from GitLab
+func (km *FileKeyManager) ImportFromGitLab(username string) ([]SSHPublicKey, error) {
+	url := fmt.Sprintf("https://gitlab.com/%s.keys", username)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch GitLab keys: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitLab API returned status %d", resp.StatusCode)
+	}
+
+	var keys []SSHPublicKey
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		keyStr := strings.TrimSpace(scanner.Text())
+		if keyStr == "" {
+			continue
+		}
+
+		key, err := km.ValidateKey(keyStr)
+		if err != nil {
+			// Log but continue with other keys
+			fmt.Fprintf(os.Stderr, "Warning: invalid key from GitLab: %v\n", err)
+			continue
+		}
+
+		// Add comment indicating source
+		key.Comment = fmt.Sprintf("gitlab.com/%s", username)
+		keys = append(keys, *key)
+
+		// Add to authorized_keys
+		if err := km.AddKey(username, *key); err != nil {
+			return nil, fmt.Errorf("add key: %w", err)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read GitLab response: %w", err)
+	}
+
+	// Log audit event
+	if km.auditLogger != nil {
+		_ = km.auditLogger.Log(AuditEvent{
+			Timestamp: time.Now(),
+			EventType: "keys_imported",
+			Method:    "gitlab",
+			User:      username,
+			Details: map[string]interface{}{
+				"source": url,
+				"count":  len(keys),
+			},
+			Success: true,
+		})
+	}
+
+	return keys, nil
+}
+
+// ValidateKeyStrength checks for weak keys (RSA < 2048 bits)
+func (km *FileKeyManager) ValidateKeyStrength(key string) error {
+	keyStr := strings.TrimSpace(key)
+
+	// Parse the SSH public key
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyStr))
+	if err != nil {
+		return fmt.Errorf("invalid SSH key: %w", err)
+	}
+
+	// Check key type and strength
+	switch publicKey.Type() {
+	case "ssh-rsa":
+		// RSA keys must be at least 2048 bits
+		keyData := publicKey.Marshal()
+		// Rough estimate: RSA 2048-bit keys are ~270+ bytes when marshaled
+		// RSA 1024-bit keys are ~140 bytes
+		if len(keyData) < 200 {
+			return fmt.Errorf("RSA key is too weak (< 2048 bits)")
+		}
+	case "ssh-dss":
+		// DSA keys are considered weak
+		return fmt.Errorf("DSA keys are no longer considered secure")
+	}
+
+	return nil
+}
+
+// RotateKey rotates a key by adding the new key and revoking the old one atomically
+func (km *FileKeyManager) RotateKey(username, oldKeyID string, newKey SSHPublicKey) error {
+	// Validate the new key first
+	if _, err := km.ValidateKey(newKey.PublicKey); err != nil {
+		return fmt.Errorf("invalid new key: %w", err)
+	}
+
+	// Read existing keys
+	keys, err := km.readAuthorizedKeys()
+	if err != nil {
+		return fmt.Errorf("read authorized_keys: %w", err)
+	}
+
+	// Find and remove old key, add new key atomically
+	found := false
+	var updatedKeys []SSHPublicKey
+	for _, key := range keys {
+		if key.ID == oldKeyID || key.Fingerprint == oldKeyID {
+			found = true
+			// Skip the old key (effectively revoking it)
+			continue
+		}
+		updatedKeys = append(updatedKeys, key)
+	}
+
+	if !found {
+		return fmt.Errorf("old key not found")
+	}
+
+	// Add the new key
+	updatedKeys = append(updatedKeys, newKey)
+
+	// Write back to file
+	if err := km.writeAuthorizedKeys(updatedKeys); err != nil {
+		return fmt.Errorf("write authorized_keys: %w", err)
+	}
+
+	// Log audit event
+	if km.auditLogger != nil {
+		_ = km.auditLogger.Log(AuditEvent{
+			Timestamp: time.Now(),
+			EventType: "key_rotated",
+			Method:    "ssh-key",
+			User:      username,
+			Details: map[string]interface{}{
+				"old_key_id":      oldKeyID,
+				"new_fingerprint": newKey.Fingerprint,
+				"new_type":        newKey.Type,
+			},
+			Success: true,
+		})
+	}
+
+	return nil
+}
+
+// CheckKeyExpiration returns all keys that have expired or are expiring soon (within 30 days)
+func (km *FileKeyManager) CheckKeyExpiration() ([]SSHPublicKey, error) {
+	keys, err := km.readAuthorizedKeys()
+	if err != nil {
+		return nil, fmt.Errorf("read authorized_keys: %w", err)
+	}
+
+	var expiringKeys []SSHPublicKey
+	now := time.Now()
+	thirtyDaysFromNow := now.Add(30 * 24 * time.Hour)
+
+	for _, key := range keys {
+		if key.ExpiresAt != nil {
+			// Check if expired or expiring within 30 days
+			if key.ExpiresAt.Before(thirtyDaysFromNow) {
+				expiringKeys = append(expiringKeys, key)
+			}
+		}
+	}
+
+	return expiringKeys, nil
+}
+
+// CheckKeyAge returns true if key is old (> 1 year) with a warning message
+func (km *FileKeyManager) CheckKeyAge(key SSHPublicKey) (bool, string) {
+	oneYearAgo := time.Now().Add(-365 * 24 * time.Hour)
+
+	if key.AddedAt.Before(oneYearAgo) {
+		age := time.Since(key.AddedAt)
+		days := int(age.Hours() / 24)
+		message := fmt.Sprintf("Key is %d days old (added %s). Consider rotating for security best practices.",
+			days, key.AddedAt.Format("2006-01-02"))
+		return true, message
+	}
+
+	return false, ""
+}
+
+// BulkRevoke revokes multiple keys at once
+func (km *FileKeyManager) BulkRevoke(username string, keyIDs []string) error {
+	if len(keyIDs) == 0 {
+		return fmt.Errorf("no key IDs provided")
+	}
+
+	keys, err := km.readAuthorizedKeys()
+	if err != nil {
+		return fmt.Errorf("read authorized_keys: %w", err)
+	}
+
+	// Create a map for fast lookup
+	revokeMap := make(map[string]bool)
+	for _, keyID := range keyIDs {
+		revokeMap[keyID] = true
+	}
+
+	// Filter out keys to revoke
+	var filtered []SSHPublicKey
+	revokedCount := 0
+	for _, key := range keys {
+		if revokeMap[key.ID] || revokeMap[key.Fingerprint] {
+			revokedCount++
+			continue
+		}
+		filtered = append(filtered, key)
+	}
+
+	if revokedCount == 0 {
+		return fmt.Errorf("no matching keys found to revoke")
+	}
+
+	// Write back to file
+	if err := km.writeAuthorizedKeys(filtered); err != nil {
+		return fmt.Errorf("write authorized_keys: %w", err)
+	}
+
+	// Log audit event
+	if km.auditLogger != nil {
+		_ = km.auditLogger.Log(AuditEvent{
+			Timestamp: time.Now(),
+			EventType: "keys_bulk_revoked",
+			Method:    "ssh-key",
+			User:      username,
+			Details: map[string]interface{}{
+				"key_ids":       keyIDs,
+				"revoked_count": revokedCount,
+			},
+			Success: true,
+		})
+	}
+
+	return nil
+}
+
+// BulkRotate rotates all keys for a user in bulk
+func (km *FileKeyManager) BulkRotate(username string, newKeys []SSHPublicKey) error {
+	if len(newKeys) == 0 {
+		return fmt.Errorf("no new keys provided")
+	}
+
+	// Validate all new keys first
+	for i, key := range newKeys {
+		if _, err := km.ValidateKey(key.PublicKey); err != nil {
+			return fmt.Errorf("invalid key at index %d: %w", i, err)
+		}
+	}
+
+	// Read existing keys
+	existingKeys, err := km.readAuthorizedKeys()
+	if err != nil {
+		return fmt.Errorf("read authorized_keys: %w", err)
+	}
+
+	oldCount := len(existingKeys)
+
+	// Replace all keys with new keys
+	if err := km.writeAuthorizedKeys(newKeys); err != nil {
+		return fmt.Errorf("write authorized_keys: %w", err)
+	}
+
+	// Log audit event
+	if km.auditLogger != nil {
+		_ = km.auditLogger.Log(AuditEvent{
+			Timestamp: time.Now(),
+			EventType: "keys_bulk_rotated",
+			Method:    "ssh-key",
+			User:      username,
+			Details: map[string]interface{}{
+				"old_count": oldCount,
+				"new_count": len(newKeys),
+			},
+			Success: true,
+		})
+	}
+
+	return nil
+}
+
+// IsDuplicate checks if fingerprint already exists, returns user if found
+func (km *FileKeyManager) IsDuplicate(fingerprint string) (bool, string, error) {
+	keys, err := km.readAuthorizedKeys()
+	if err != nil {
+		return false, "", fmt.Errorf("read authorized_keys: %w", err)
+	}
+
+	for _, key := range keys {
+		if key.Fingerprint == fingerprint {
+			// Extract username from comment if available
+			username := "unknown"
+			if key.Comment != "" {
+				// Try to extract username from comments like "github.com/username" or "gitlab.com/username"
+				parts := strings.Split(key.Comment, "/")
+				if len(parts) > 1 {
+					username = parts[len(parts)-1]
+				} else {
+					username = key.Comment
+				}
+			}
+			return true, username, nil
+		}
+	}
+
+	return false, "", nil
 }
 
 // readAuthorizedKeys reads and parses the authorized_keys file

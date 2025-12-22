@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/fatih/color"
@@ -366,17 +365,3 @@ func checkSystemRequirements() checkResult {
 	}
 }
 
-// Helper to check if a command exists
-func commandExists(cmd string) bool {
-	_, err := exec.LookPath(cmd)
-	return err == nil
-}
-
-// Helper to get command version
-func getCommandVersion(cmd string, args ...string) string {
-	output, err := exec.Command(cmd, args...).Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(output))
-}

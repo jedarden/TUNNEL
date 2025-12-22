@@ -195,7 +195,7 @@ func ExampleAuditLogging() {
 	}
 
 	// Log connection established
-	err = logger.LogConnectionEstablished(
+	_ = logger.LogConnectionEstablished(
 		"ssh-key",
 		"alice",
 		"192.168.1.100",
@@ -208,7 +208,7 @@ func ExampleAuditLogging() {
 	time.Sleep(2 * time.Second)
 
 	// Log connection closed
-	err = logger.LogConnectionClosed(
+	_ = logger.LogConnectionClosed(
 		"ssh-key",
 		"alice",
 		"192.168.1.100",
@@ -220,7 +220,7 @@ func ExampleAuditLogging() {
 	)
 
 	// Log a failed authentication
-	err = logger.LogConnectionAttempt(
+	_ = logger.LogConnectionAttempt(
 		"password",
 		"bob",
 		"10.0.0.5",
@@ -231,7 +231,7 @@ func ExampleAuditLogging() {
 	)
 
 	// Log key operations
-	err = logger.LogKeyOperation(
+	_ = logger.LogKeyOperation(
 		"key_added",
 		"alice",
 		true,
@@ -243,7 +243,7 @@ func ExampleAuditLogging() {
 	)
 
 	// Log configuration changes
-	err = logger.LogConfigChange(
+	_ = logger.LogConfigChange(
 		"admin",
 		map[string]interface{}{
 			"field":     "ssh.port",
@@ -298,7 +298,7 @@ func ExampleIntegratedSetup() {
 	}
 
 	cfg.OnChange(func(c *config.Config) {
-		auditLogger.LogConfigChange("system", map[string]interface{}{
+		_ = auditLogger.LogConfigChange("system", map[string]interface{}{
 			"event": "config_reloaded",
 		})
 	})
@@ -324,7 +324,7 @@ func ExampleIntegratedSetup() {
 	}
 
 	// Example: Log an event
-	auditLogger.Log(AuditEvent{
+	_ = auditLogger.Log(AuditEvent{
 		Timestamp: time.Now(),
 		EventType: "system_started",
 		Method:    "system",
