@@ -30,15 +30,19 @@ type DefaultMetricsCollector struct {
 	mu          sync.RWMutex
 	connections map[string]*Connection
 	ticker      *time.Ticker
-	done        chan struct{}
 	running     bool
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
 }
 
 // NewMetricsCollector creates a new metrics collector
 func NewMetricsCollector() *DefaultMetricsCollector {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &DefaultMetricsCollector{
 		connections: make(map[string]*Connection),
-		done:        make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -75,7 +79,7 @@ func (mc *DefaultMetricsCollector) Collect(ctx context.Context, conn *Connection
 	conn.Metrics.mu.Lock()
 	conn.Metrics.Latency = latency
 	conn.Metrics.LastActive = time.Now()
-	if conn.State == StateConnected && !conn.StartedAt.IsZero() {
+	if conn.GetState() == StateConnected && !conn.StartedAt.IsZero() {
 		conn.Metrics.Uptime = time.Since(conn.StartedAt)
 	}
 	conn.Metrics.mu.Unlock()
@@ -92,19 +96,22 @@ func (mc *DefaultMetricsCollector) Start(ctx context.Context, interval time.Dura
 	}
 	mc.running = true
 	mc.ticker = time.NewTicker(interval)
+	// Recreate internal context for this run (in case of restart after Stop)
+	mc.ctx, mc.cancel = context.WithCancel(ctx)
+	// Copy context to local var to avoid race with Stop() modifying mc.ctx
+	localCtx := mc.ctx
+	mc.wg.Add(1)
 	mc.mu.Unlock()
 
-	go mc.collectLoop(ctx)
+	go mc.collectLoop(localCtx)
 }
 
 // collectLoop runs the continuous collection loop
 func (mc *DefaultMetricsCollector) collectLoop(ctx context.Context) {
+	defer mc.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
-			mc.Stop()
-			return
-		case <-mc.done:
 			return
 		case <-mc.ticker.C:
 			mc.collectAll(ctx)
@@ -140,9 +147,8 @@ func (mc *DefaultMetricsCollector) collectAll(ctx context.Context) {
 // Stop halts metric collection
 func (mc *DefaultMetricsCollector) Stop() {
 	mc.mu.Lock()
-	defer mc.mu.Unlock()
-
 	if !mc.running {
+		mc.mu.Unlock()
 		return
 	}
 
@@ -150,8 +156,12 @@ func (mc *DefaultMetricsCollector) Stop() {
 	if mc.ticker != nil {
 		mc.ticker.Stop()
 	}
-	close(mc.done)
-	mc.done = make(chan struct{}) // Reset for potential restart
+	// Cancel context to signal goroutines to stop
+	mc.cancel()
+	mc.mu.Unlock()
+
+	// Wait for goroutine to exit
+	mc.wg.Wait()
 }
 
 // Export returns metrics in a standard format

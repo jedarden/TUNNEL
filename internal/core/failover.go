@@ -40,10 +40,10 @@ type FailoverManager struct {
 	eventPublisher   *EventPublisher
 	metricsCollector MetricsCollector
 	ticker           *time.Ticker
-	done             chan struct{}
 	running          bool
 	ctx              context.Context
 	cancel           context.CancelFunc
+	wg               sync.WaitGroup
 }
 
 // HealthStatus tracks the health of a connection
@@ -70,7 +70,6 @@ func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, colle
 		healthStatus:     make(map[string]*HealthStatus),
 		eventPublisher:   publisher,
 		metricsCollector: collector,
-		done:             make(chan struct{}),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -112,9 +111,14 @@ func (fm *FailoverManager) Start() {
 	}
 	fm.running = true
 	fm.ticker = time.NewTicker(fm.config.HealthCheckInterval)
+	// Recreate context for this run (in case of restart after Stop)
+	fm.ctx, fm.cancel = context.WithCancel(context.Background())
+	// Copy context to local var to avoid race with Stop() modifying fm.ctx
+	ctx := fm.ctx
+	fm.wg.Add(1)
 	fm.mu.Unlock()
 
-	go fm.monitorLoop()
+	go fm.monitorLoop(ctx)
 }
 
 // Stop halts the failover monitoring
@@ -129,27 +133,20 @@ func (fm *FailoverManager) Stop() {
 	if fm.ticker != nil {
 		fm.ticker.Stop()
 	}
-	// Cancel context first to signal goroutines to stop
+	// Cancel context to signal goroutines to stop
 	fm.cancel()
 	fm.mu.Unlock()
 
-	// Wait a bit for goroutines to exit before closing done channel
-	time.Sleep(10 * time.Millisecond)
-
-	// Recreate done channel and context for potential restart
-	fm.mu.Lock()
-	fm.done = make(chan struct{})
-	fm.ctx, fm.cancel = context.WithCancel(context.Background())
-	fm.mu.Unlock()
+	// Wait for goroutine to exit
+	fm.wg.Wait()
 }
 
 // monitorLoop continuously monitors connection health
-func (fm *FailoverManager) monitorLoop() {
+func (fm *FailoverManager) monitorLoop(ctx context.Context) {
+	defer fm.wg.Done()
 	for {
 		select {
-		case <-fm.ctx.Done():
-			return
-		case <-fm.done:
+		case <-ctx.Done():
 			return
 		case <-fm.ticker.C:
 			fm.performHealthChecks()

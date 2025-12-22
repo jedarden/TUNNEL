@@ -35,10 +35,6 @@ func TestNewFailoverManager(t *testing.T) {
 	if fm.metricsCollector == nil {
 		t.Error("Expected metricsCollector to be set")
 	}
-
-	if fm.done == nil {
-		t.Error("Expected done channel to be initialized")
-	}
 }
 
 func TestNewFailoverManagerNilConfig(t *testing.T) {
