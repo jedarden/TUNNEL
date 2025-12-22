@@ -186,8 +186,115 @@ func (n *NgrokProvider) HealthCheck() (*providers.HealthStatus, error) {
 
 // GetLogs retrieves logs since the specified time
 func (n *NgrokProvider) GetLogs(since time.Time) ([]providers.LogEntry, error) {
-	// ngrok logs to stdout when started
-	return []providers.LogEntry{}, nil
+	if !n.IsInstalled() {
+		return []providers.LogEntry{}, nil
+	}
+
+	var logs []providers.LogEntry
+
+	// ngrok typically logs to ~/.ngrok2/ngrok.log
+	homeDir := ""
+	cmd := exec.Command("sh", "-c", "echo $HOME")
+	if output, err := cmd.Output(); err == nil {
+		homeDir = strings.TrimSpace(string(output))
+	}
+
+	if homeDir == "" {
+		return []providers.LogEntry{}, nil
+	}
+
+	logFile := homeDir + "/.ngrok2/ngrok.log"
+
+	// Try to read the log file
+	cmd = exec.Command("tail", "-n", "100", logFile)
+	output, err := cmd.Output()
+	if err != nil {
+		// If log file doesn't exist or can't be read, return empty array
+		return []providers.LogEntry{}, nil
+	}
+
+	// Parse ngrok log format
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// ngrok log format: lvl=info msg="..." t=2006-01-02T15:04:05-0700
+		var timestamp time.Time
+		var level string
+		var message string
+
+		// Extract timestamp
+		if idx := strings.Index(line, "t="); idx != -1 {
+			timeStr := line[idx+2:]
+			if spaceIdx := strings.Index(timeStr, " "); spaceIdx != -1 {
+				timeStr = timeStr[:spaceIdx]
+			}
+			if ts, err := time.Parse(time.RFC3339, timeStr); err == nil {
+				timestamp = ts
+			}
+		}
+
+		// Extract level
+		if idx := strings.Index(line, "lvl="); idx != -1 {
+			levelStr := line[idx+4:]
+			if spaceIdx := strings.Index(levelStr, " "); spaceIdx != -1 {
+				levelStr = levelStr[:spaceIdx]
+			}
+			switch strings.ToLower(levelStr) {
+			case "error", "eror", "err":
+				level = "Error"
+			case "warning", "warn":
+				level = "Warning"
+			case "info":
+				level = "Info"
+			default:
+				level = "Info"
+			}
+		}
+
+		// Extract message
+		if idx := strings.Index(line, "msg=\""); idx != -1 {
+			msgStart := idx + 5
+			msgEnd := strings.Index(line[msgStart:], "\"")
+			if msgEnd != -1 {
+				message = line[msgStart : msgStart+msgEnd]
+			}
+		}
+
+		// Fallback: use entire line as message if parsing fails
+		if message == "" {
+			message = line
+		}
+
+		if timestamp.IsZero() {
+			timestamp = time.Now()
+		}
+
+		if level == "" {
+			level = "Info"
+		}
+
+		// Filter by time
+		if timestamp.Before(since) {
+			continue
+		}
+
+		logs = append(logs, providers.LogEntry{
+			Timestamp: timestamp,
+			Level:     level,
+			Message:   message,
+			Source:    "ngrok",
+		})
+	}
+
+	// Limit to last 100 entries
+	if len(logs) > 100 {
+		logs = logs[len(logs)-100:]
+	}
+
+	return logs, nil
 }
 
 // ValidateConfig validates ngrok-specific configuration

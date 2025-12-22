@@ -211,9 +211,147 @@ func (w *WireGuardProvider) HealthCheck() (*providers.HealthStatus, error) {
 
 // GetLogs retrieves logs since the specified time
 func (w *WireGuardProvider) GetLogs(since time.Time) ([]providers.LogEntry, error) {
-	// WireGuard logs to kernel/system logs
-	// This would require journalctl or similar
-	return []providers.LogEntry{}, nil
+	if !w.IsInstalled() {
+		return []providers.LogEntry{}, nil
+	}
+
+	var logs []providers.LogEntry
+
+	// Try journalctl for wg-quick service first
+	sinceArg := since.Format("2006-01-02 15:04:05")
+	cmd := exec.Command("journalctl", "-u", "wg-quick@*", "--since", sinceArg, "-n", "100", "--no-pager")
+	output, err := cmd.Output()
+	if err == nil {
+		logs = append(logs, parseSystemLogs(string(output), "wg-quick")...)
+	}
+
+	// Also try to get kernel logs via dmesg
+	cmd = exec.Command("dmesg", "-T")
+	output, err = cmd.Output()
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			if !strings.Contains(strings.ToLower(line), "wireguard") {
+				continue
+			}
+
+			// Parse dmesg line format: [timestamp] message
+			var timestamp time.Time
+			var message string
+
+			// Try to parse timestamp
+			re := regexp.MustCompile(`^\[([^\]]+)\]\s+(.*)$`)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) > 2 {
+				// dmesg -T outputs human-readable timestamps
+				if ts, err := time.Parse("Mon Jan 2 15:04:05 2006", matches[1]); err == nil {
+					timestamp = ts
+					message = matches[2]
+				}
+			}
+
+			if timestamp.IsZero() {
+				// Fallback: use current time if parsing fails
+				timestamp = time.Now()
+				message = line
+			}
+
+			// Filter by time
+			if timestamp.Before(since) {
+				continue
+			}
+
+			// Determine log level
+			level := "Info"
+			msgLower := strings.ToLower(message)
+			if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "fatal") {
+				level = "Error"
+			} else if strings.Contains(msgLower, "warning") || strings.Contains(msgLower, "warn") {
+				level = "Warning"
+			}
+
+			logs = append(logs, providers.LogEntry{
+				Timestamp: timestamp,
+				Level:     level,
+				Message:   message,
+				Source:    "kernel",
+			})
+		}
+	}
+
+	// Limit to last 100 entries
+	if len(logs) > 100 {
+		logs = logs[len(logs)-100:]
+	}
+
+	return logs, nil
+}
+
+// parseSystemLogs parses standard syslog format
+func parseSystemLogs(output, source string) []providers.LogEntry {
+	var logs []providers.LogEntry
+	lines := strings.Split(output, "\n")
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// Parse syslog format: "Mon DD HH:MM:SS hostname service[pid]: message"
+		// Or journalctl format: "Mon YYYY-MM-DD HH:MM:SS hostname service[pid]: message"
+		parts := strings.SplitN(line, ": ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+
+		message := parts[1]
+
+		// Try to parse timestamp from the beginning
+		var timestamp time.Time
+		fields := strings.Fields(parts[0])
+		if len(fields) >= 3 {
+			// Try different timestamp formats
+			timeStr := strings.Join(fields[0:3], " ")
+			formats := []string{
+				"Jan 02 15:04:05",
+				"2006-01-02 15:04:05",
+			}
+
+			for _, format := range formats {
+				if ts, err := time.Parse(format, timeStr); err == nil {
+					// If year is not in format, use current year
+					if !strings.Contains(format, "2006") {
+						timestamp = ts.AddDate(time.Now().Year(), 0, 0)
+					} else {
+						timestamp = ts
+					}
+					break
+				}
+			}
+		}
+
+		if timestamp.IsZero() {
+			timestamp = time.Now()
+		}
+
+		// Determine log level
+		level := "Info"
+		msgLower := strings.ToLower(message)
+		if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "fatal") {
+			level = "Error"
+		} else if strings.Contains(msgLower, "warning") || strings.Contains(msgLower, "warn") {
+			level = "Warning"
+		}
+
+		logs = append(logs, providers.LogEntry{
+			Timestamp: timestamp,
+			Level:     level,
+			Message:   message,
+			Source:    source,
+		})
+	}
+
+	return logs
 }
 
 // ValidateConfig validates WireGuard-specific configuration

@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/jedarden/tunnel/internal/registry"
+	"github.com/jedarden/tunnel/pkg/config"
 )
 
 // ViewMode represents the current active view
@@ -28,12 +29,16 @@ type App struct {
 	showHelp    bool
 
 	// Dependencies
-	registry *registry.Registry
-	manager  *core.DefaultConnectionManager
+	registry  *registry.Registry
+	manager   *core.DefaultConnectionManager
+	appConfig *config.Config
 
 	// Sub-models
 	dashboard *Dashboard
 	browser   *Browser
+	config    *Config
+	monitor   *Monitor
+	logs      *Logs
 	help      *Help
 }
 
@@ -47,13 +52,20 @@ type ToggleHelpMsg struct{}
 type RefreshConnectionsMsg struct{}
 
 // NewApp creates a new TUI application instance
-func NewApp(reg *registry.Registry, mgr *core.DefaultConnectionManager) *App {
+func NewApp(reg *registry.Registry, mgr *core.DefaultConnectionManager, cfg *config.Config) *App {
+	// Get manager config from manager
+	mgrConfig := core.DefaultManagerConfig()
+
 	return &App{
 		currentView: ViewDashboard,
 		registry:    reg,
 		manager:     mgr,
+		appConfig:   cfg,
 		dashboard:   NewDashboard(reg, mgr),
 		browser:     NewBrowser(reg),
+		config:      NewConfig(cfg, mgrConfig),
+		monitor:     NewMonitor(reg, mgr),
+		logs:        NewLogs(reg),
 		help:        NewHelp(),
 		showHelp:    false,
 		width:       80,
@@ -134,6 +146,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update sub-models with new dimensions
 		a.dashboard.SetSize(msg.Width, msg.Height)
 		a.browser.SetSize(msg.Width, msg.Height)
+		a.config.SetSize(msg.Width, msg.Height)
+		a.monitor.SetSize(msg.Width, msg.Height)
+		a.logs.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case SwitchViewMsg:
@@ -145,9 +160,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case RefreshConnectionsMsg:
-		// Refresh connections in the dashboard
+		// Refresh connections in the dashboard and monitor
 		if a.dashboard != nil {
 			a.dashboard.RefreshConnections()
+		}
+		if a.monitor != nil {
+			a.monitor.RefreshConnections()
 		}
 		return a, nil
 	}
@@ -163,6 +181,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ViewBrowser:
 			updatedBrowser, cmd := a.browser.Update(msg)
 			a.browser = updatedBrowser.(*Browser)
+			cmds = append(cmds, cmd)
+
+		case ViewConfig:
+			updatedConfig, cmd := a.config.Update(msg)
+			a.config = updatedConfig.(*Config)
+			cmds = append(cmds, cmd)
+
+		case ViewMonitor:
+			updatedMonitor, cmd := a.monitor.Update(msg)
+			a.monitor = updatedMonitor.(*Monitor)
+			cmds = append(cmds, cmd)
+
+		case ViewLogs:
+			updatedLogs, cmd := a.logs.Update(msg)
+			a.logs = updatedLogs.(*Logs)
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -190,11 +223,11 @@ func (a *App) View() string {
 	case ViewBrowser:
 		content = a.browser.View()
 	case ViewConfig:
-		content = a.renderPlaceholder("Config", "Coming soon...")
-	case ViewLogs:
-		content = a.renderPlaceholder("Logs", "Coming soon...")
+		content = a.config.View()
 	case ViewMonitor:
-		content = a.renderPlaceholder("Monitor", "Coming soon...")
+		content = a.monitor.View()
+	case ViewLogs:
+		content = a.logs.View()
 	}
 
 	// Build the full UI based on terminal size

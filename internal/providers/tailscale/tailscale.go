@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,9 +176,87 @@ func (t *TailscaleProvider) HealthCheck() (*providers.HealthStatus, error) {
 
 // GetLogs retrieves logs since the specified time
 func (t *TailscaleProvider) GetLogs(since time.Time) ([]providers.LogEntry, error) {
-	// Tailscale doesn't provide easy log access via CLI
-	// This would require reading system logs or using tailscaled debug endpoints
-	return []providers.LogEntry{}, nil
+	if !t.IsInstalled() {
+		return []providers.LogEntry{}, nil
+	}
+
+	var logs []providers.LogEntry
+
+	// Try to get logs from journalctl for tailscaled service
+	sinceArg := since.Format("2006-01-02 15:04:05")
+	cmd := exec.Command("journalctl", "-u", "tailscaled", "--since", sinceArg, "-n", "100", "--no-pager", "-o", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		// If journalctl fails, return empty array gracefully
+		return []providers.LogEntry{}, nil
+	}
+
+	// Parse journalctl JSON output (each line is a separate JSON object)
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		var entry map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+
+		// Extract timestamp
+		var timestamp time.Time
+		if ts, ok := entry["__REALTIME_TIMESTAMP"].(string); ok {
+			// Microseconds since epoch
+			if microseconds, err := strconv.ParseInt(ts, 10, 64); err == nil {
+				timestamp = time.Unix(0, microseconds*1000)
+			}
+		}
+
+		// Extract message
+		message := ""
+		if msg, ok := entry["MESSAGE"].(string); ok {
+			message = msg
+		}
+
+		// Determine log level from priority
+		level := "Info"
+		if priority, ok := entry["PRIORITY"].(string); ok {
+			switch priority {
+			case "0", "1", "2", "3":
+				level = "Error"
+			case "4":
+				level = "Warning"
+			default:
+				level = "Info"
+			}
+		}
+
+		// Determine level from message content if not already error/warning
+		if level == "Info" {
+			msgLower := strings.ToLower(message)
+			if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "fatal") {
+				level = "Error"
+			} else if strings.Contains(msgLower, "warning") || strings.Contains(msgLower, "warn") {
+				level = "Warning"
+			}
+		}
+
+		if !timestamp.IsZero() && message != "" {
+			logs = append(logs, providers.LogEntry{
+				Timestamp: timestamp,
+				Level:     level,
+				Message:   message,
+				Source:    "tailscaled",
+			})
+		}
+	}
+
+	// Limit to last 100 entries
+	if len(logs) > 100 {
+		logs = logs[len(logs)-100:]
+	}
+
+	return logs, nil
 }
 
 // ValidateConfig validates Tailscale-specific configuration

@@ -8,6 +8,7 @@ import (
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/jedarden/tunnel/internal/registry"
 	"github.com/jedarden/tunnel/internal/tui"
+	"github.com/jedarden/tunnel/pkg/config"
 )
 
 func main() {
@@ -17,8 +18,11 @@ func main() {
 	// Create the connection manager
 	mgr := core.NewConnectionManager(core.DefaultManagerConfig())
 
+	// Load or create default config
+	cfg := config.GetDefaultConfig()
+
 	// Create the TUI application with dependencies
-	app := tui.NewApp(reg, mgr)
+	app := tui.NewApp(reg, mgr, cfg)
 
 	// Create the Bubbletea program
 	p := tea.NewProgram(app, tea.WithAltScreen())

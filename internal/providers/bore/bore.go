@@ -216,8 +216,106 @@ func (b *BoreProvider) HealthCheck() (*providers.HealthStatus, error) {
 
 // GetLogs retrieves logs since the specified time
 func (b *BoreProvider) GetLogs(since time.Time) ([]providers.LogEntry, error) {
-	// bore outputs to stdout when started
-	return []providers.LogEntry{}, nil
+	if !b.IsInstalled() {
+		return []providers.LogEntry{}, nil
+	}
+
+	// bore doesn't maintain a persistent log file by default
+	// We can only capture logs if we have access to the running process output
+	// For now, we'll check system logs for any bore-related entries
+
+	var logs []providers.LogEntry
+
+	// Try to get process output via ps and grep
+	// This is a best-effort approach since bore logs to stdout
+	cmd := exec.Command("ps", "aux")
+	output, err := cmd.Output()
+	if err != nil {
+		return []providers.LogEntry{}, nil
+	}
+
+	// Look for bore process
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "bore local") {
+			// Found the bore process
+			// We can add a log entry indicating the process is running
+			logs = append(logs, providers.LogEntry{
+				Timestamp: time.Now(),
+				Level:     "Info",
+				Message:   "bore tunnel process is running: " + strings.TrimSpace(line),
+				Source:    "bore",
+			})
+			break
+		}
+	}
+
+	// Try journalctl for user logs if available
+	cmd = exec.Command("journalctl", "--user", "--since", since.Format("2006-01-02 15:04:05"), "-n", "100", "--no-pager")
+	output, err = cmd.Output()
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			if !strings.Contains(strings.ToLower(line), "bore") {
+				continue
+			}
+
+			// Parse timestamp from journalctl output
+			var timestamp time.Time
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				timeStr := strings.Join(fields[0:3], " ")
+				formats := []string{
+					"Jan 02 15:04:05",
+					"2006-01-02 15:04:05",
+				}
+
+				for _, format := range formats {
+					if ts, err := time.Parse(format, timeStr); err == nil {
+						if !strings.Contains(format, "2006") {
+							timestamp = ts.AddDate(time.Now().Year(), 0, 0)
+						} else {
+							timestamp = ts
+						}
+						break
+					}
+				}
+			}
+
+			if timestamp.IsZero() {
+				timestamp = time.Now()
+			}
+
+			// Determine log level
+			level := "Info"
+			lineLower := strings.ToLower(line)
+			if strings.Contains(lineLower, "error") || strings.Contains(lineLower, "failed") {
+				level = "Error"
+			} else if strings.Contains(lineLower, "warning") || strings.Contains(lineLower, "warn") {
+				level = "Warning"
+			}
+
+			// Extract message (everything after timestamp)
+			message := line
+			if len(fields) > 3 {
+				message = strings.Join(fields[3:], " ")
+			}
+
+			logs = append(logs, providers.LogEntry{
+				Timestamp: timestamp,
+				Level:     level,
+				Message:   message,
+				Source:    "bore",
+			})
+		}
+	}
+
+	// Limit to last 100 entries
+	if len(logs) > 100 {
+		logs = logs[len(logs)-100:]
+	}
+
+	return logs, nil
 }
 
 // ValidateConfig validates bore-specific configuration

@@ -519,7 +519,7 @@ func launchTUI(ctx context.Context) error {
 	}
 
 	// Create the TUI application
-	app := tui.NewApp(reg, manager)
+	app := tui.NewApp(reg, manager, appConfig)
 
 	// Create and run the Bubble Tea program
 	p := tea.NewProgram(app, tea.WithAltScreen())
@@ -705,11 +705,113 @@ func restartConnection(method string) error {
 	if verbose {
 		fmt.Printf("Restarting connection: %s\n", method)
 	}
-	// TODO: Implement connection restart
-	if err := stopConnection(method); err != nil {
-		return err
+
+	// Get provider from registry
+	provider, err := reg.GetProvider(method)
+	if err != nil {
+		return fmt.Errorf("provider not found: %s", method)
 	}
-	return startConnection(method)
+
+	// Check if provider is installed
+	if !provider.IsInstalled() {
+		return fmt.Errorf("%s is not installed. Please install it first", method)
+	}
+
+	// Store the current connection state and configuration
+	wasConnected := provider.IsConnected()
+	var connInfo interface{}
+
+	if wasConnected {
+		// Try to get current connection info before stopping
+		connInfo, _ = provider.GetConnectionInfo()
+
+		if verbose && !jsonOutput {
+			color.Yellow("Stopping current connection...")
+		}
+
+		// Stop the connection gracefully
+		if err := provider.Disconnect(); err != nil {
+			// Log the error but continue with restart
+			if verbose {
+				fmt.Fprintf(os.Stderr, "Warning: Error during disconnect: %v\n", err)
+			}
+		}
+
+		// Wait a moment for cleanup
+		time.Sleep(1 * time.Second)
+	}
+
+	if verbose && !jsonOutput {
+		if wasConnected {
+			color.Cyan("Restarting connection...")
+		} else {
+			color.Cyan("Starting connection (was not connected)...")
+		}
+	}
+
+	// Start the connection
+	if err := provider.Connect(); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status":        "error",
+				"error":         err.Error(),
+				"method":        method,
+				"was_connected": wasConnected,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to restart connection: %w", err)
+	}
+
+	// Get new connection info
+	newConnInfo, err := provider.GetConnectionInfo()
+	if err != nil && verbose {
+		fmt.Fprintf(os.Stderr, "Warning: Could not retrieve connection info: %v\n", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status":        "restarted",
+			"method":        method,
+			"was_connected": wasConnected,
+		}
+		if newConnInfo != nil {
+			output["connection_info"] = newConnInfo
+		}
+		if connInfo != nil {
+			output["previous_connection_info"] = connInfo
+		}
+		return printJSON(output)
+	}
+
+	// Display success message
+	color.Green("✓ Successfully restarted %s connection", method)
+
+	// Show connection details if available
+	if newConnInfo != nil {
+		fmt.Println()
+		color.Cyan("Connection Details:")
+
+		// Access connection info fields directly
+		if newConnInfo.TunnelURL != "" {
+			fmt.Printf("  Tunnel URL: %s\n", color.CyanString("%s", newConnInfo.TunnelURL))
+		}
+		if newConnInfo.LocalIP != "" {
+			fmt.Printf("  Local IP: %s\n", color.CyanString("%s", newConnInfo.LocalIP))
+		}
+		if newConnInfo.RemoteIP != "" {
+			fmt.Printf("  Remote IP: %s\n", color.CyanString("%s", newConnInfo.RemoteIP))
+		}
+	}
+
+	// Show uptime
+	if wasConnected {
+		fmt.Println()
+		fmt.Printf("Connection restarted at: %s\n",
+			color.CyanString(time.Now().Format("2006-01-02 15:04:05")))
+	}
+
+	return nil
 }
 
 func showStatus() error {
@@ -856,9 +958,190 @@ func configureMethod(method string) error {
 	if verbose {
 		fmt.Printf("Configuring method: %s\n", method)
 	}
-	// TODO: Implement interactive configuration
-	color.Yellow("Interactive configuration not yet implemented for: %s", method)
+
+	// Check if provider exists
+	provider, err := reg.GetProvider(method)
+	if err != nil {
+		return fmt.Errorf("provider not found: %s", method)
+	}
+
+	// Check if installed
+	if !provider.IsInstalled() {
+		return fmt.Errorf("%s is not installed. Please install it first", method)
+	}
+
+	color.Cyan("=== Configure %s ===", method)
+	fmt.Println()
+
+	// Get home directory for credential storage
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Create credential store
+	credStore, err := NewCredentialStore(
+		"file",
+		"tunnel",
+		filepath.Join(homeDir, ".config", "tunnel", "credentials"),
+		"tunnel-credentials", // passphrase - in production, this should be more secure
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create credential store: %w", err)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// Provider-specific configuration prompts
+	switch method {
+	case "tailscale":
+		fmt.Println("Tailscale Configuration")
+		fmt.Println("----------------------")
+
+		fmt.Print("Auth Key (optional, press Enter to skip): ")
+		authKey, _ := reader.ReadString('\n')
+		authKey = strings.TrimSpace(authKey)
+		if authKey != "" {
+			if err := credStore.Set(method, "auth_key", []byte(authKey)); err != nil {
+				return fmt.Errorf("failed to store auth key: %w", err)
+			}
+		}
+
+		fmt.Print("Hostname (optional, press Enter to skip): ")
+		hostname, _ := reader.ReadString('\n')
+		hostname = strings.TrimSpace(hostname)
+		if hostname != "" {
+			if err := credStore.Set(method, "hostname", []byte(hostname)); err != nil {
+				return fmt.Errorf("failed to store hostname: %w", err)
+			}
+		}
+
+		color.Green("✓ Tailscale configured successfully")
+
+	case "wireguard":
+		fmt.Println("WireGuard Configuration")
+		fmt.Println("----------------------")
+
+		fmt.Print("Interface Name (e.g., wg0): ")
+		interfaceName, _ := reader.ReadString('\n')
+		interfaceName = strings.TrimSpace(interfaceName)
+		if interfaceName == "" {
+			interfaceName = "wg0"
+		}
+		if err := credStore.Set(method, "interface", []byte(interfaceName)); err != nil {
+			return fmt.Errorf("failed to store interface: %w", err)
+		}
+
+		fmt.Print("Config File Path (e.g., /etc/wireguard/wg0.conf): ")
+		configPath, _ := reader.ReadString('\n')
+		configPath = strings.TrimSpace(configPath)
+		if configPath != "" {
+			if err := credStore.Set(method, "config_path", []byte(configPath)); err != nil {
+				return fmt.Errorf("failed to store config path: %w", err)
+			}
+		}
+
+		color.Green("✓ WireGuard configured successfully")
+
+	case "cloudflare", "cloudflared":
+		fmt.Println("Cloudflare Tunnel Configuration")
+		fmt.Println("-------------------------------")
+
+		fmt.Print("Tunnel Token: ")
+		token, _ := reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return fmt.Errorf("tunnel token is required")
+		}
+		if err := credStore.Set(method, "tunnel_token", []byte(token)); err != nil {
+			return fmt.Errorf("failed to store tunnel token: %w", err)
+		}
+
+		color.Green("✓ Cloudflare Tunnel configured successfully")
+
+	case "ngrok":
+		fmt.Println("ngrok Configuration")
+		fmt.Println("------------------")
+
+		fmt.Print("Auth Token: ")
+		authToken, _ := reader.ReadString('\n')
+		authToken = strings.TrimSpace(authToken)
+		if authToken == "" {
+			return fmt.Errorf("auth token is required")
+		}
+		if err := credStore.Set(method, "auth_token", []byte(authToken)); err != nil {
+			return fmt.Errorf("failed to store auth token: %w", err)
+		}
+
+		fmt.Print("Region (us, eu, ap, au, sa, jp, in - press Enter for us): ")
+		region, _ := reader.ReadString('\n')
+		region = strings.TrimSpace(region)
+		if region == "" {
+			region = "us"
+		}
+		if err := credStore.Set(method, "region", []byte(region)); err != nil {
+			return fmt.Errorf("failed to store region: %w", err)
+		}
+
+		color.Green("✓ ngrok configured successfully")
+
+	case "zerotier":
+		fmt.Println("ZeroTier Configuration")
+		fmt.Println("---------------------")
+
+		fmt.Print("Network ID: ")
+		networkID, _ := reader.ReadString('\n')
+		networkID = strings.TrimSpace(networkID)
+		if networkID == "" {
+			return fmt.Errorf("network ID is required")
+		}
+		if err := credStore.Set(method, "network_id", []byte(networkID)); err != nil {
+			return fmt.Errorf("failed to store network ID: %w", err)
+		}
+
+		color.Green("✓ ZeroTier configured successfully")
+
+	case "bore":
+		fmt.Println("bore Configuration")
+		fmt.Println("-----------------")
+
+		fmt.Print("Server Address (press Enter for bore.pub): ")
+		serverAddr, _ := reader.ReadString('\n')
+		serverAddr = strings.TrimSpace(serverAddr)
+		if serverAddr == "" {
+			serverAddr = "bore.pub"
+		}
+		if err := credStore.Set(method, "server", []byte(serverAddr)); err != nil {
+			return fmt.Errorf("failed to store server: %w", err)
+		}
+
+		fmt.Print("Port (press Enter for 22): ")
+		portStr, _ := reader.ReadString('\n')
+		portStr = strings.TrimSpace(portStr)
+		if portStr == "" {
+			portStr = "22"
+		}
+		if err := credStore.Set(method, "port", []byte(portStr)); err != nil {
+			return fmt.Errorf("failed to store port: %w", err)
+		}
+
+		color.Green("✓ bore configured successfully")
+
+	default:
+		color.Yellow("No specific configuration prompts available for: %s", method)
+		fmt.Println("You can still use 'tunnel auth set-key' to set API keys if needed.")
+	}
+
+	fmt.Println()
+	fmt.Printf("Configuration saved to: %s\n",
+		color.CyanString(filepath.Join(homeDir, ".config", "tunnel", "credentials")))
+
 	return nil
+}
+
+// NewCredentialStore creates a credential store (helper function)
+func NewCredentialStore(storeType, serviceName, baseDir, passphrase string) (core.CredentialStore, error) {
+	return core.NewCredentialStore(storeType, serviceName, baseDir, passphrase)
 }
 
 func getConfig(key string) error {
@@ -1020,13 +1303,145 @@ func setAPIKey(method string) error {
 	if verbose {
 		fmt.Printf("Setting API key for: %s\n", method)
 	}
-	// TODO: Implement API key setting
-	fmt.Printf("Enter API key for %s: ", method)
-	var apiKey string
-	_, _ = fmt.Scanln(&apiKey)
 
-	configKey := fmt.Sprintf("providers.%s.api_key", method)
-	return setConfig(configKey, apiKey)
+	// Check if provider exists
+	provider, err := reg.GetProvider(method)
+	if err != nil {
+		return fmt.Errorf("provider not found: %s", method)
+	}
+
+	// Check if installed
+	if !provider.IsInstalled() {
+		color.Yellow("Warning: %s is not installed", method)
+		fmt.Print("Continue anyway? (y/N): ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(confirm) != "y" {
+			return nil
+		}
+	}
+
+	color.Cyan("=== Set API Key for %s ===", method)
+	fmt.Println()
+
+	// Get home directory for credential storage
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Create credential store
+	credStore, err := NewCredentialStore(
+		"file",
+		"tunnel",
+		filepath.Join(homeDir, ".config", "tunnel", "credentials"),
+		"tunnel-credentials",
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create credential store: %w", err)
+	}
+
+	// Read API key from stdin
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("Enter API key for %s: ", method)
+	apiKey, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read API key: %w", err)
+	}
+
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("API key cannot be empty")
+	}
+
+	// Validate key format based on provider
+	if err := validateAPIKey(method, apiKey); err != nil {
+		color.Yellow("Warning: %v", err)
+		fmt.Print("Store anyway? (y/N): ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(confirm) != "y" {
+			return nil
+		}
+	}
+
+	// Store the API key securely
+	if err := credStore.Set(method, "api_key", []byte(apiKey)); err != nil {
+		if jsonOutput {
+			output := map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+				"method": method,
+			}
+			return printJSON(output)
+		}
+		return fmt.Errorf("failed to store API key: %w", err)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"status": "success",
+			"method": method,
+			"message": "API key stored securely",
+		}
+		return printJSON(output)
+	}
+
+	color.Green("✓ API key stored securely")
+	fmt.Printf("  Provider: %s\n", method)
+	fmt.Printf("  Location: %s\n",
+		color.CyanString(filepath.Join(homeDir, ".config", "tunnel", "credentials")))
+
+	// Show next steps
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Printf("  1. Test the connection: %s\n", color.CyanString("tunnel start %s", method))
+	fmt.Printf("  2. Check status: %s\n", color.CyanString("tunnel status"))
+
+	return nil
+}
+
+// validateAPIKey performs basic validation on API key format
+func validateAPIKey(method, apiKey string) error {
+	// Basic validation rules for different providers
+	switch method {
+	case "ngrok":
+		// ngrok auth tokens are typically long alphanumeric strings
+		if len(apiKey) < 20 {
+			return fmt.Errorf("ngrok auth token seems too short (expected 20+ characters)")
+		}
+	case "cloudflare", "cloudflared":
+		// Cloudflare tunnel tokens are base64-encoded and quite long
+		if len(apiKey) < 32 {
+			return fmt.Errorf("cloudflare tunnel token seems too short")
+		}
+	case "tailscale":
+		// Tailscale auth keys typically start with "tskey-"
+		if !strings.HasPrefix(apiKey, "tskey-") && len(apiKey) > 10 {
+			return fmt.Errorf("tailscale auth key should start with 'tskey-'")
+		}
+	case "zerotier":
+		// ZeroTier network IDs are 16-character hex strings
+		if len(apiKey) == 16 {
+			// This might be a network ID, which is valid
+			for _, c := range apiKey {
+				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+					return fmt.Errorf("zerotier network ID should be a 16-character hex string")
+				}
+			}
+		}
+	}
+
+	// Generic validation: no spaces, reasonable length
+	if strings.Contains(apiKey, " ") {
+		return fmt.Errorf("API key should not contain spaces")
+	}
+
+	if len(apiKey) < 8 {
+		return fmt.Errorf("API key seems too short (minimum 8 characters)")
+	}
+
+	return nil
 }
 
 func authStatus() error {

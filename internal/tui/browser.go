@@ -217,6 +217,11 @@ func (b *Browser) View() string {
 		return b.renderSearchMode()
 	}
 
+	// Handle empty categories
+	if len(b.categories) == 0 {
+		return b.renderEmptyView()
+	}
+
 	// Use compact single-column layout for small terminals
 	if IsCompact(b.width, b.height) {
 		return b.renderCompactView()
@@ -295,6 +300,21 @@ func (b *Browser) renderCompactView() string {
 
 	// Compact help
 	content.WriteString(HelpDescStyle.Render("←→:cat ↑↓:sel /:search"))
+
+	return content.String()
+}
+
+// renderEmptyView renders a view when no categories are available
+func (b *Browser) renderEmptyView() string {
+	var content strings.Builder
+
+	content.WriteString(TitleStyle.Render("Connection Method Browser"))
+	content.WriteString("\n\n")
+	content.WriteString(InfoStyle.Render("No connection methods available"))
+	content.WriteString("\n\n")
+	content.WriteString(HelpDescStyle.Render("No providers are registered. Check your configuration."))
+	content.WriteString("\n\n")
+	content.WriteString(b.renderBrowserHelp())
 
 	return content.String()
 }

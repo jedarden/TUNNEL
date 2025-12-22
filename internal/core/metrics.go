@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 )
@@ -27,22 +28,26 @@ type MetricsCollector interface {
 
 // DefaultMetricsCollector implements MetricsCollector
 type DefaultMetricsCollector struct {
-	mu          sync.RWMutex
-	connections map[string]*Connection
-	ticker      *time.Ticker
-	running     bool
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
+	mu              sync.RWMutex
+	connections     map[string]*Connection
+	latencyHistory  map[string][]time.Duration // Historical latency data for averaging
+	historySize     int                        // Number of historical samples to keep
+	ticker          *time.Ticker
+	running         bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
 }
 
 // NewMetricsCollector creates a new metrics collector
 func NewMetricsCollector() *DefaultMetricsCollector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DefaultMetricsCollector{
-		connections: make(map[string]*Connection),
-		ctx:         ctx,
-		cancel:      cancel,
+		connections:    make(map[string]*Connection),
+		latencyHistory: make(map[string][]time.Duration),
+		historySize:    10, // Keep last 10 samples for averaging
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -62,22 +67,32 @@ func (mc *DefaultMetricsCollector) UnregisterConnection(connID string) {
 
 // Collect gathers metrics for a specific connection
 func (mc *DefaultMetricsCollector) Collect(ctx context.Context, conn *Connection) error {
-	// Measure latency using a simple ping
-	start := time.Now()
-
-	// TODO: Implement actual latency measurement
-	// For now, simulate with a small delay
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(10 * time.Millisecond):
+	// Measure actual latency
+	latency, err := mc.measureLatency(ctx, conn)
+	if err != nil {
+		// If measurement fails, record the error but don't fail
+		conn.Metrics.RecordFailure(err)
+		latency = 0 // Use 0 to indicate measurement failure
 	}
 
-	latency := time.Since(start)
+	// Store in history and calculate average
+	mc.mu.Lock()
+	history := mc.latencyHistory[conn.ID]
+	history = append(history, latency)
+
+	// Keep only the most recent samples
+	if len(history) > mc.historySize {
+		history = history[len(history)-mc.historySize:]
+	}
+	mc.latencyHistory[conn.ID] = history
+
+	// Calculate average latency
+	avgLatency := mc.calculateAverageLatency(history)
+	mc.mu.Unlock()
 
 	// Update connection metrics
 	conn.Metrics.mu.Lock()
-	conn.Metrics.Latency = latency
+	conn.Metrics.Latency = avgLatency
 	conn.Metrics.LastActive = time.Now()
 	if conn.GetState() == StateConnected && !conn.StartedAt.IsZero() {
 		conn.Metrics.Uptime = time.Since(conn.StartedAt)
@@ -85,6 +100,93 @@ func (mc *DefaultMetricsCollector) Collect(ctx context.Context, conn *Connection
 	conn.Metrics.mu.Unlock()
 
 	return nil
+}
+
+// measureLatency performs actual latency measurement using TCP connection test
+func (mc *DefaultMetricsCollector) measureLatency(ctx context.Context, conn *Connection) (time.Duration, error) {
+	// Determine the target address for latency measurement
+	target := mc.getLatencyTarget(conn)
+	if target == "" {
+		return 0, fmt.Errorf("no target available for latency measurement")
+	}
+
+	// Measure latency using TCP dial
+	start := time.Now()
+
+	// Use a timeout for the dial operation
+	timeout := 5 * time.Second
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	dialer := &net.Dialer{
+		Timeout: timeout,
+	}
+
+	tcpConn, err := dialer.DialContext(dialCtx, "tcp", target)
+	if err != nil {
+		// TCP connection failed, could be firewall or network issue
+		return 0, fmt.Errorf("tcp dial failed: %w", err)
+	}
+	defer tcpConn.Close()
+
+	latency := time.Since(start)
+	return latency, nil
+}
+
+// getLatencyTarget determines the appropriate target for latency measurement
+func (mc *DefaultMetricsCollector) getLatencyTarget(conn *Connection) string {
+	// Try to use the connection's remote host and port if available
+	if conn.RemoteHost != "" && conn.RemotePort > 0 {
+		return fmt.Sprintf("%s:%d", conn.RemoteHost, conn.RemotePort)
+	}
+
+	// Fallback targets based on provider type
+	switch conn.Method {
+	case "cloudflare", "cloudflared":
+		// Cloudflare's DNS service for latency check
+		return "1.1.1.1:443"
+	case "tailscale":
+		// Tailscale coordination server
+		return "controlplane.tailscale.com:443"
+	case "ngrok":
+		// ngrok's main server
+		return "tunnel.us.ngrok.com:443"
+	case "wireguard":
+		// Try to connect to the local WireGuard interface
+		return "127.0.0.1:51820"
+	case "zerotier":
+		// ZeroTier's main service
+		return "my.zerotier.com:443"
+	case "bore":
+		// Bore typically uses a custom server, default to localhost
+		return "127.0.0.1:2200"
+	default:
+		// Default fallback: use Google's DNS
+		return "8.8.8.8:443"
+	}
+}
+
+// calculateAverageLatency computes the average from historical samples
+func (mc *DefaultMetricsCollector) calculateAverageLatency(history []time.Duration) time.Duration {
+	if len(history) == 0 {
+		return 0
+	}
+
+	var total time.Duration
+	validSamples := 0
+
+	for _, latency := range history {
+		if latency > 0 { // Only count valid samples
+			total += latency
+			validSamples++
+		}
+	}
+
+	if validSamples == 0 {
+		return 0
+	}
+
+	return total / time.Duration(validSamples)
 }
 
 // Start begins continuous metric collection
