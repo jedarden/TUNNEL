@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fatih/color"
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/jedarden/tunnel/internal/providers"
 	"github.com/jedarden/tunnel/internal/registry"
+	"github.com/jedarden/tunnel/internal/tui"
 	"github.com/jedarden/tunnel/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -516,15 +518,17 @@ func launchTUI(ctx context.Context) error {
 		fmt.Println("Launching TUI...")
 	}
 
-	// Import the TUI package and launch it
-	// This will be handled by the TUI package
-	// For now, we'll provide instructions for integration
-	color.Yellow("TUI framework is implemented. Integration with Bubbletea coming next.")
-	color.Cyan("\nTUI Components Ready:")
-	fmt.Println("  - Dashboard view with active connections")
-	fmt.Println("  - Browser for selecting connection methods")
-	fmt.Println("  - Help system with keyboard shortcuts")
-	fmt.Println("  - Lipgloss styling system")
+	// Create the TUI application
+	app := tui.NewApp(reg, manager)
+
+	// Create and run the Bubble Tea program
+	p := tea.NewProgram(app, tea.WithAltScreen())
+
+	// Run the program
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("failed to run TUI: %w", err)
+	}
+
 	return nil
 }
 
