@@ -176,6 +176,11 @@ func (a *App) View() string {
 		return a.renderHelp()
 	}
 
+	// Check for tiny terminal
+	if IsTiny(a.width, a.height) {
+		return a.renderTinyView()
+	}
+
 	var content string
 
 	// Render current view
@@ -185,20 +190,29 @@ func (a *App) View() string {
 	case ViewBrowser:
 		content = a.browser.View()
 	case ViewConfig:
-		content = a.renderPlaceholder("Configuration", "Configuration view coming soon...")
+		content = a.renderPlaceholder("Config", "Coming soon...")
 	case ViewLogs:
-		content = a.renderPlaceholder("Logs", "Log viewer coming soon...")
+		content = a.renderPlaceholder("Logs", "Coming soon...")
 	case ViewMonitor:
-		content = a.renderPlaceholder("Monitor", "Connection monitor coming soon...")
+		content = a.renderPlaceholder("Monitor", "Coming soon...")
 	}
 
-	// Build the full UI
-	header := a.renderHeader()
-	tabs := a.renderTabs()
-	footer := a.renderFooter()
+	// Build the full UI based on terminal size
+	compact := IsCompact(a.width, a.height)
+
+	var header, tabs, footer string
+	if compact {
+		header = a.renderCompactHeader()
+		tabs = a.renderCompactTabs()
+		footer = a.renderCompactFooter()
+	} else {
+		header = a.renderHeader()
+		tabs = a.renderTabs()
+		footer = a.renderFooter()
+	}
 
 	// Calculate content height
-	contentHeight := a.height - lipgloss.Height(header) - lipgloss.Height(tabs) - lipgloss.Height(footer) - 2
+	contentHeight := a.height - lipgloss.Height(header) - lipgloss.Height(tabs) - lipgloss.Height(footer)
 
 	// Ensure content fits within available height
 	if contentHeight > 0 {
@@ -215,6 +229,80 @@ func (a *App) View() string {
 		content,
 		footer,
 	)
+}
+
+// renderTinyView renders a minimal view for very small terminals
+func (a *App) renderTinyView() string {
+	var b strings.Builder
+
+	// Just show essential info
+	b.WriteString(TitleStyle.Render("TUNNEL"))
+	b.WriteString(" ")
+
+	// Show current view indicator
+	views := []string{"D", "B", "C", "L", "M"}
+	for i, v := range views {
+		if ViewMode(i) == a.currentView {
+			b.WriteString(ActiveTabStyle.Render("[" + v + "]"))
+		} else {
+			b.WriteString(TabStyle.Render(v))
+		}
+	}
+	b.WriteString("\n")
+
+	// Show connection status in compact form
+	if a.registry != nil {
+		connected := a.registry.GetConnectedProviders()
+		if len(connected) > 0 {
+			b.WriteString(StatusConnectedStyle.Render(IconConnected))
+			b.WriteString(" ")
+			for i, p := range connected {
+				if i > 0 {
+					b.WriteString(",")
+				}
+				// Truncate name to first 3 chars
+				name := p.Name()
+				if len(name) > 3 {
+					name = name[:3]
+				}
+				b.WriteString(name)
+			}
+		} else {
+			b.WriteString(StatusStoppedStyle.Render(IconStopped + " No conn"))
+		}
+	}
+	b.WriteString("\n")
+
+	// Minimal controls
+	b.WriteString(HelpDescStyle.Render("1-5:view ?:help q:quit"))
+
+	return b.String()
+}
+
+// renderCompactHeader renders a minimal header
+func (a *App) renderCompactHeader() string {
+	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render("SSH Tunnel Manager")
+}
+
+// renderCompactTabs renders compact tab navigation
+func (a *App) renderCompactTabs() string {
+	tabs := []string{"1:Dash", "2:Browse", "3:Cfg", "4:Log", "5:Mon"}
+	var result []string
+
+	for i, t := range tabs {
+		if ViewMode(i) == a.currentView {
+			result = append(result, ActiveTabStyle.Render(t))
+		} else {
+			result = append(result, TabStyle.Render(t))
+		}
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Left, result...)
+}
+
+// renderCompactFooter renders a minimal footer
+func (a *App) renderCompactFooter() string {
+	return HelpDescStyle.Render("?:help q:quit ↑↓:nav")
 }
 
 // renderHeader renders the application header

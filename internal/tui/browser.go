@@ -217,6 +217,11 @@ func (b *Browser) View() string {
 		return b.renderSearchMode()
 	}
 
+	// Use compact single-column layout for small terminals
+	if IsCompact(b.width, b.height) {
+		return b.renderCompactView()
+	}
+
 	// Header
 	var content strings.Builder
 	content.WriteString(TitleStyle.Render("Connection Method Browser"))
@@ -240,6 +245,56 @@ func (b *Browser) View() string {
 	content.WriteString("\n")
 	helpText := b.renderBrowserHelp()
 	content.WriteString(helpText)
+
+	return content.String()
+}
+
+// renderCompactView renders a compact single-column browser
+func (b *Browser) renderCompactView() string {
+	var content strings.Builder
+
+	// Show current category name
+	if len(b.categories) > 0 && b.selectedCategory < len(b.categories) {
+		cat := b.categories[b.selectedCategory]
+		content.WriteString(TitleStyle.Render(cat.Name))
+		content.WriteString(" ")
+		content.WriteString(HelpDescStyle.Render(fmt.Sprintf("(%d/%d)", b.selectedCategory+1, len(b.categories))))
+		content.WriteString("\n")
+
+		// Show methods in current category
+		maxMethods := b.height - 4
+		if maxMethods < 2 {
+			maxMethods = 2
+		}
+
+		for i := 0; i < len(cat.Methods) && i < maxMethods; i++ {
+			method := cat.Methods[i]
+			name := method.Name
+
+			// Truncate name if needed
+			maxLen := b.width - 4
+			if len(name) > maxLen {
+				name = name[:maxLen-3] + "..."
+			}
+
+			if i == b.selectedMethod {
+				// Show status for selected
+				status := ""
+				if method.Status == "connected" {
+					status = StatusConnectedStyle.Render(IconConnected)
+				} else if method.Recommended {
+					status = IconStyle.Render(IconStar)
+				}
+				content.WriteString(SelectedItemStyle.Render(IconArrow+" "+name) + " " + status)
+			} else {
+				content.WriteString(ListItemStyle.Render(" " + name))
+			}
+			content.WriteString("\n")
+		}
+	}
+
+	// Compact help
+	content.WriteString(HelpDescStyle.Render("←→:cat ↑↓:sel /:search"))
 
 	return content.String()
 }

@@ -172,6 +172,11 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the dashboard
 func (d *Dashboard) View() string {
+	// Use compact single-column layout for small terminals
+	if IsCompact(d.width, d.height) {
+		return d.renderCompactView()
+	}
+
 	// Create three columns: connections, quick actions, system status
 	connectionsPanel := d.renderConnections()
 	actionsPanel := d.renderQuickActions()
@@ -194,6 +199,58 @@ func (d *Dashboard) View() string {
 	)
 
 	return row
+}
+
+// renderCompactView renders a compact single-column dashboard
+func (d *Dashboard) renderCompactView() string {
+	var b strings.Builder
+
+	// Connections summary (one line per connection)
+	b.WriteString(TitleStyle.Render("Connections"))
+	b.WriteString("\n")
+
+	if len(d.connections) == 0 {
+		b.WriteString(HelpDescStyle.Render(" No active connections"))
+		b.WriteString("\n")
+	} else {
+		for _, conn := range d.connections {
+			icon := d.getStatusIndicator(conn.Status)
+			// Compact: icon + name + IP
+			line := fmt.Sprintf("%s %s", icon, conn.Method)
+			if conn.IP != "" && conn.IP != "-" {
+				line += " " + HelpDescStyle.Render(conn.IP)
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+
+	// Quick actions (compact)
+	b.WriteString("\n")
+	b.WriteString(TitleStyle.Render("Actions"))
+	b.WriteString("\n")
+
+	// Show only first 3 actions in compact mode
+	maxActions := 3
+	if d.height < 12 {
+		maxActions = 2
+	}
+
+	for i := 0; i < len(d.quickActions) && i < maxActions; i++ {
+		action := d.quickActions[i]
+		// Truncate action text
+		if len(action) > d.width-5 {
+			action = action[:d.width-8] + "..."
+		}
+		if i == d.selectedAction {
+			b.WriteString(SelectedItemStyle.Render(IconArrow + " " + action))
+		} else {
+			b.WriteString(ListItemStyle.Render(" " + action))
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
 
 // renderConnections renders the active connections panel

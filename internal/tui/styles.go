@@ -36,50 +36,43 @@ var (
 	// Title styles
 	TitleStyle = lipgloss.NewStyle().
 			Foreground(ColorPrimary).
-			Bold(true).
-			Padding(0, 1)
+			Bold(true)
 
 	SubtitleStyle = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
-			Italic(true).
-			Padding(0, 1)
+			Italic(true)
 
-	// Box styles
+	// Box styles - compact for small terminals
 	BoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorBorder).
-			Padding(1, 2).
-			MarginRight(1).
-			MarginBottom(1)
+			Padding(0, 1)
 
 	PanelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorPrimary).
-			Padding(1, 2).
-			MarginRight(1).
-			MarginBottom(1)
+			Padding(0, 1)
 
 	ActivePanelStyle = lipgloss.NewStyle().
-				Border(lipgloss.DoubleBorder()).
+				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorPrimary).
-				Padding(1, 2).
-				MarginRight(1).
-				MarginBottom(1)
+				Padding(0, 1)
+
+	// Compact box for very small terminals
+	CompactBoxStyle = lipgloss.NewStyle().
+			BorderForeground(ColorBorder)
 
 	// List styles
 	ListItemStyle = lipgloss.NewStyle().
 			Foreground(ColorText).
-			PaddingLeft(2)
+			PaddingLeft(1)
 
 	SelectedItemStyle = lipgloss.NewStyle().
 				Foreground(ColorPrimary).
-				Bold(true).
-				PaddingLeft(1).
-				MarginLeft(0)
+				Bold(true)
 
 	// Status styles
 	StatusStyle = lipgloss.NewStyle().
-			Padding(0, 1).
 			Bold(true)
 
 	StatusConnectedStyle = StatusStyle.
@@ -95,9 +88,7 @@ var (
 	HeaderStyle = lipgloss.NewStyle().
 			Foreground(ColorPrimary).
 			Background(ColorBgLight).
-			Bold(true).
-			Padding(0, 1).
-			Width(100)
+			Bold(true)
 
 	// Help styles
 	HelpKeyStyle = lipgloss.NewStyle().
@@ -110,40 +101,32 @@ var (
 	HelpSeparatorStyle = lipgloss.NewStyle().
 				Foreground(ColorBorder)
 
-	// Tab styles
+	// Tab styles - compact
 	TabStyle = lipgloss.NewStyle().
-			Padding(0, 2).
+			Padding(0, 1).
 			Foreground(ColorMuted)
 
 	ActiveTabStyle = lipgloss.NewStyle().
-			Padding(0, 2).
+			Padding(0, 1).
 			Foreground(ColorPrimary).
 			Bold(true).
 			Underline(true)
 
-	// Badge styles
+	// Badge styles - no padding for compact
 	BadgeStyle = lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorPrimary).
-			Padding(0, 1).
+			Foreground(ColorPrimary).
 			Bold(true)
 
 	WarningBadgeStyle = lipgloss.NewStyle().
-				Foreground(ColorText).
-				Background(ColorWarning).
-				Padding(0, 1).
+				Foreground(ColorWarning).
 				Bold(true)
 
 	DangerBadgeStyle = lipgloss.NewStyle().
-				Foreground(ColorText).
-				Background(ColorDanger).
-				Padding(0, 1).
+				Foreground(ColorDanger).
 				Bold(true)
 
 	SuccessBadgeStyle = lipgloss.NewStyle().
-				Foreground(ColorText).
-				Background(ColorSuccess).
-				Padding(0, 1).
+				Foreground(ColorSuccess).
 				Bold(true)
 
 	// Icon styles
@@ -154,13 +137,11 @@ var (
 	// Input styles
 	InputStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(ColorBorder).
-			Padding(0, 1)
+			BorderForeground(ColorBorder)
 
 	FocusedInputStyle = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder()).
-				BorderForeground(ColorPrimary).
-				Padding(0, 1)
+				BorderForeground(ColorPrimary)
 
 	// Message styles
 	ErrorStyle = lipgloss.NewStyle().
@@ -174,13 +155,20 @@ var (
 	InfoStyle = lipgloss.NewStyle().
 			Foreground(ColorInfo)
 
-	// Footer styles
+	// Footer styles - minimal
 	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorMuted).
-			Padding(1, 2).
-			BorderTop(true).
-			BorderForeground(ColorBorder)
+			Foreground(ColorMuted)
 )
+
+// IsCompact returns true if terminal is too small for full UI
+func IsCompact(width, height int) bool {
+	return width < 60 || height < 20
+}
+
+// IsTiny returns true if terminal is very small
+func IsTiny(width, height int) bool {
+	return width < 40 || height < 12
+}
 
 // Status icons
 const (
