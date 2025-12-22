@@ -1,0 +1,57 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  disable:
+    - typecheck  # Sometimes gives false positives
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      # Audit logging - non-critical, best-effort
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).Log
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).LogConfigChange
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).LogConnectionAttempt
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).LogConnectionClosed
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).LogConnectionEstablished
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).LogError
+      - (*github.com/jedarden/tunnel/internal/core.AuditLogger).LogKeyOperation
+      # Test helpers - OK to ignore in tests
+      - (net/http.ResponseWriter).Write
+      - (*encoding/json.Encoder).Encode
+      - fmt.Fprintf
+      - fmt.Printf
+      - fmt.Println
+      # Defer cleanup - errors typically logged already
+      - (*github.com/jedarden/tunnel/internal/core.DefaultConnectionManager).Shutdown
+
+  staticcheck:
+    checks:
+      - all
+      - "-SA1019"  # Disable deprecated warnings (crypto/dsa is intentional for legacy key detection)
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests
+    - path: _test\.go
+      linters:
+        - errcheck
+    # Exclude example files
+    - path: example
+      linters:
+        - errcheck
+    # Allow unused variables with nolint comment
+    - linters:
+        - unused
+      source: "nolint:unused"
+
+  # Maximum issues count per one linter
+  max-issues-per-linter: 0
+  max-same-issues: 0

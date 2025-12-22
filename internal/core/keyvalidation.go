@@ -353,8 +353,8 @@ func (r *KeySecurityReport) GetSecuritySummary() string {
 	}
 
 	if r.IsWeak {
-		summary.WriteString(fmt.Sprintf("\nSECURITY: WEAK\n"))
-		summary.WriteString(fmt.Sprintf("  Reason: %s\n", r.WeakReason))
+		summary.WriteString("\nSECURITY: WEAK\n")
+		summary.WriteString("  Reason: " + r.WeakReason + "\n")
 	} else {
 		summary.WriteString("\nSECURITY: STRONG\n")
 	}

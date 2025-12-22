@@ -31,9 +31,8 @@ var (
 	keyManager *core.FileKeyManager
 )
 
-// appConfig holds the loaded application configuration
-// nolint:unused // loaded for future use
-var appConfig *config.Config
+// appConfig holds the loaded application configuration (used during initialization)
+var appConfig *config.Config //nolint:unused
 
 // Execute runs the root command
 func Execute(ctx context.Context) error {
@@ -504,7 +503,7 @@ Use this command in emergency situations such as:
 
 func init() {
 	emergencyRevokeCmd.Flags().StringVar(&emergencyRevokeReason, "reason", "", "reason for emergency revocation (required)")
-	emergencyRevokeCmd.MarkFlagRequired("reason")
+	_ = emergencyRevokeCmd.MarkFlagRequired("reason")
 	emergencyRevokeCmd.Flags().BoolVar(&emergencyRevokeKillSessions, "kill-sessions", false, "kill active SSH sessions for the user")
 	emergencyRevokeCmd.Flags().BoolVar(&emergencyRevokeNotify, "notify", false, "send notification about the revocation")
 	emergencyRevokeCmd.Flags().BoolVar(&emergencyRevokeForce, "force", false, "skip confirmation prompt")
