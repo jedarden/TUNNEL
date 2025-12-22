@@ -112,6 +112,14 @@ func (m *Monitor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Show details for selected connection
 			// For now, just refresh
 			return m, m.refresh()
+
+		case "d":
+			// Disconnect selected connection
+			return m, m.disconnectSelected()
+
+		case "x", "delete", "backspace":
+			// Delete selected connection (disconnect first if needed)
+			return m, m.deleteSelected()
 		}
 
 	case TickMsg:
@@ -574,20 +582,15 @@ func (m *Monitor) renderConnectionDetails(conn MonitorConnection) string {
 func (m *Monitor) renderHelp() string {
 	help := []string{
 		HelpKeyStyle.Render("↑/↓") + HelpDescStyle.Render(" select"),
+		HelpKeyStyle.Render("d") + HelpDescStyle.Render(" disconnect"),
+		HelpKeyStyle.Render("x") + HelpDescStyle.Render(" delete"),
 		HelpKeyStyle.Render("r") + HelpDescStyle.Render(" refresh"),
-		HelpKeyStyle.Render("p") + HelpDescStyle.Render(" pause/resume"),
-		HelpKeyStyle.Render("Enter") + HelpDescStyle.Render(" details"),
+		HelpKeyStyle.Render("p") + HelpDescStyle.Render(" pause"),
 	}
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		help[0],
-		HelpSeparatorStyle.Render(" • "),
-		help[1],
-		HelpSeparatorStyle.Render(" • "),
-		help[2],
-		HelpSeparatorStyle.Render(" • "),
-		help[3],
+		strings.Join(help, HelpSeparatorStyle.Render(" • ")),
 	)
 }
 
@@ -654,4 +657,70 @@ func truncate(s string, max int) string {
 		return s[:max]
 	}
 	return s[:max-3] + "..."
+}
+
+// disconnectSelected disconnects the currently selected connection
+func (m *Monitor) disconnectSelected() tea.Cmd {
+	return func() tea.Msg {
+		if len(m.connections) == 0 || m.selectedIndex >= len(m.connections) {
+			return RefreshConnectionsMsg{}
+		}
+
+		conn := m.connections[m.selectedIndex]
+
+		// Try to disconnect via instance manager first
+		if m.instanceManager != nil {
+			if err := m.instanceManager.DisconnectInstance(conn.ID); err == nil {
+				return RefreshConnectionsMsg{}
+			}
+		}
+
+		// Try to disconnect via registry (singleton providers)
+		if m.registry != nil {
+			provider, err := m.registry.GetProvider(conn.Method)
+			if err == nil && provider.IsConnected() {
+				_ = provider.Disconnect()
+			}
+		}
+
+		// Try to disconnect via connection manager
+		if m.manager != nil {
+			_ = m.manager.Stop(conn.ID)
+		}
+
+		return RefreshConnectionsMsg{}
+	}
+}
+
+// deleteSelected deletes the currently selected connection
+func (m *Monitor) deleteSelected() tea.Cmd {
+	return func() tea.Msg {
+		if len(m.connections) == 0 || m.selectedIndex >= len(m.connections) {
+			return RefreshConnectionsMsg{}
+		}
+
+		conn := m.connections[m.selectedIndex]
+
+		// Try to delete via instance manager (handles disconnect automatically)
+		if m.instanceManager != nil {
+			if err := m.instanceManager.DeleteInstance(conn.ID); err == nil {
+				return RefreshConnectionsMsg{}
+			}
+		}
+
+		// For singleton providers, just disconnect (can't truly "delete")
+		if m.registry != nil {
+			provider, err := m.registry.GetProvider(conn.Method)
+			if err == nil && provider.IsConnected() {
+				_ = provider.Disconnect()
+			}
+		}
+
+		// Remove from connection manager
+		if m.manager != nil {
+			_ = m.manager.Stop(conn.ID)
+		}
+
+		return RefreshConnectionsMsg{}
+	}
 }
