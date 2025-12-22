@@ -110,19 +110,22 @@ func NewWizardWithInstanceManager(reg *registry.Registry, instanceMgr *registry.
 
 // setupFields configures the wizard fields based on provider type
 func (w *Wizard) setupFields() {
-	switch w.providerName {
-	case "Tailscale":
+	// Normalize provider name to lowercase for matching
+	providerName := strings.ToLower(w.providerName)
+
+	switch providerName {
+	case "tailscale":
 		w.fields = []WizardField{
 			{Name: "auth_key", Label: "Auth Key", Placeholder: "tskey-...", Required: false, Secret: true},
 			{Name: "hostname", Label: "Hostname", Placeholder: "my-device", Required: false},
 			{Name: "accept_routes", Label: "Accept Routes", Value: "yes", Placeholder: "yes/no", Required: false},
 		}
-	case "WireGuard":
+	case "wireguard":
 		w.fields = []WizardField{
 			{Name: "interface", Label: "Interface Name", Value: "wg0", Placeholder: "wg0", Required: true},
 			{Name: "config_file", Label: "Config File Path", Placeholder: "/etc/wireguard/wg0.conf", Required: true},
 		}
-	case "Cloudflare Tunnel":
+	case "cloudflare", "cloudflare tunnel":
 		w.fields = []WizardField{
 			{Name: "token", Label: "Tunnel Token", Placeholder: "eyJ...", Required: true, Secret: true},
 			{Name: "tunnel_name", Label: "Tunnel Name", Placeholder: "my-tunnel", Required: false},
@@ -134,7 +137,7 @@ func (w *Wizard) setupFields() {
 			{Name: "port", Label: "Local Port", Value: "22", Placeholder: "22", Required: true},
 			{Name: "proto", Label: "Protocol", Value: "tcp", Placeholder: "tcp/http", Required: false},
 		}
-	case "ZeroTier":
+	case "zerotier":
 		w.fields = []WizardField{
 			{Name: "network_id", Label: "Network ID", Placeholder: "16-char hex", Required: true},
 		}
