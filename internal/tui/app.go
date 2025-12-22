@@ -365,7 +365,7 @@ func (a *App) renderTinyView() string {
 	// Just show essential info with version
 	b.WriteString(TitleStyle.Render("TUNNEL"))
 	b.WriteString(" ")
-	b.WriteString(HelpDescStyle.Render("v" + version.Version))
+	b.WriteString(HelpDescStyle.Render(version.Version))
 	b.WriteString(" ")
 
 	// Show current view indicator
@@ -410,7 +410,7 @@ func (a *App) renderTinyView() string {
 
 // renderCompactHeader renders a minimal header
 func (a *App) renderCompactHeader() string {
-	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render("v"+version.Version)
+	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render(version.Version)
 }
 
 // renderCompactTabs renders compact tab navigation
@@ -438,7 +438,7 @@ func (a *App) renderCompactFooter() string {
 func (a *App) renderHeader() string {
 	title := TitleStyle.Render("TUNNEL")
 	subtitle := SubtitleStyle.Render("Terminal Unified Network Node Encrypted Link")
-	versionStr := HelpDescStyle.Render("v" + version.Version)
+	versionStr := HelpDescStyle.Render(version.Version)
 
 	header := lipgloss.JoinHorizontal(
 		lipgloss.Left,
