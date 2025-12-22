@@ -302,6 +302,8 @@ func TestAppCompactViewContent(t *testing.T) {
 // TestHelpOverlayRenders tests help overlay rendering
 func TestHelpOverlayRenders(t *testing.T) {
 	help := NewHelp()
+	// Set size large enough to display all sections
+	help.SetSize(100, 50)
 
 	output := help.View()
 

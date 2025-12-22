@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -221,6 +222,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.config.SetSize(msg.Width, msg.Height)
 		a.monitor.SetSize(msg.Width, msg.Height)
 		a.logs.SetSize(msg.Width, msg.Height)
+		a.help.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case SwitchViewMsg:
@@ -362,10 +364,12 @@ func (a *App) View() string {
 func (a *App) renderTinyView() string {
 	var b strings.Builder
 
-	// Just show essential info with version
+	// Just show essential info with version and dimensions
 	b.WriteString(TitleStyle.Render("TUNNEL"))
 	b.WriteString(" ")
 	b.WriteString(HelpDescStyle.Render(version.Version))
+	b.WriteString(" ")
+	b.WriteString(HelpDescStyle.Render(fmt.Sprintf("[%dx%d]", a.width, a.height)))
 	b.WriteString(" ")
 
 	// Show current view indicator
@@ -410,7 +414,8 @@ func (a *App) renderTinyView() string {
 
 // renderCompactHeader renders a minimal header
 func (a *App) renderCompactHeader() string {
-	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render(version.Version)
+	dims := HelpDescStyle.Render(fmt.Sprintf("[%dx%d]", a.width, a.height))
+	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render(version.Version) + " " + dims
 }
 
 // renderCompactTabs renders compact tab navigation
@@ -439,6 +444,7 @@ func (a *App) renderHeader() string {
 	title := TitleStyle.Render("TUNNEL")
 	subtitle := SubtitleStyle.Render("Terminal Unified Network Node Encrypted Link")
 	versionStr := HelpDescStyle.Render(version.Version)
+	dims := HelpDescStyle.Render(fmt.Sprintf("[%dx%d]", a.width, a.height))
 
 	header := lipgloss.JoinHorizontal(
 		lipgloss.Left,
@@ -446,6 +452,8 @@ func (a *App) renderHeader() string {
 		subtitle,
 		"  ",
 		versionStr,
+		" ",
+		dims,
 	)
 
 	return HeaderStyle.Width(a.width).Render(header)

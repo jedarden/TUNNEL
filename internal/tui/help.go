@@ -21,11 +21,15 @@ type HelpItem struct {
 // Help is the help overlay model
 type Help struct {
 	sections []HelpSection
+	width    int
+	height   int
 }
 
 // NewHelp creates a new help instance
 func NewHelp() *Help {
 	return &Help{
+		width:  80,
+		height: 24,
 		sections: []HelpSection{
 			{
 				Title: "Navigation",
@@ -88,66 +92,159 @@ func NewHelp() *Help {
 	}
 }
 
+// SetSize updates the help dimensions
+func (h *Help) SetSize(width, height int) {
+	h.width = width
+	h.height = height
+}
+
 // View renders the help overlay
 func (h *Help) View() string {
+	// Use compact view for small terminals
+	if IsCompact(h.width, h.height) {
+		return h.renderCompact()
+	}
+
+	// Use tiny view for very small terminals
+	if IsTiny(h.width, h.height) {
+		return h.renderTiny()
+	}
+
 	var content strings.Builder
+
+	// Calculate available content width (leave room for padding and borders)
+	contentWidth := h.width - 12
+	if contentWidth > 90 {
+		contentWidth = 90 // Cap max width for readability
+	}
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
 
 	// Title
 	title := TitleStyle.Render("TUNNEL - Keyboard Shortcuts")
 	content.WriteString(lipgloss.NewStyle().
-		Width(100).
+		Width(contentWidth).
 		Align(lipgloss.Center).
 		Render(title))
 	content.WriteString("\n\n")
 
-	// Render each section
+	// Calculate how many sections we can fit
+	availableHeight := h.height - 10 // Leave room for title, footer, padding
+	linesUsed := 0
+
+	// Render sections that fit
 	for i, section := range h.sections {
-		content.WriteString(h.renderSection(section))
-		if i < len(h.sections)-1 {
+		sectionContent := h.renderSection(section, contentWidth)
+		sectionLines := strings.Count(sectionContent, "\n") + 1
+
+		// Check if we have room for this section
+		if linesUsed+sectionLines > availableHeight && linesUsed > 0 {
+			content.WriteString(HelpDescStyle.Render("... (scroll with ↑/↓ or press ? to close)"))
+			break
+		}
+
+		content.WriteString(sectionContent)
+		linesUsed += sectionLines
+
+		if i < len(h.sections)-1 && linesUsed < availableHeight {
 			content.WriteString("\n")
+			linesUsed++
 		}
 	}
 
 	// Footer
 	content.WriteString("\n\n")
-	footer := HelpDescStyle.Render("Press ? or Esc to close this help screen")
+	footer := HelpDescStyle.Render("Press ? or Esc to close")
 	content.WriteString(lipgloss.NewStyle().
-		Width(100).
+		Width(contentWidth).
 		Align(lipgloss.Center).
 		Render(footer))
 
-	// Wrap in a box
+	// Wrap in a box with dynamic width
+	boxWidth := contentWidth + 8
 	helpBox := PanelStyle.
-		Width(100).
-		Padding(2, 4).
+		Width(boxWidth).
+		Padding(1, 2).
 		Render(content.String())
 
-	// Center on screen
+	// Center on screen using actual dimensions
 	return lipgloss.Place(
-		120,
-		40,
+		h.width,
+		h.height,
 		lipgloss.Center,
 		lipgloss.Center,
 		helpBox,
 	)
 }
 
-// renderSection renders a help section
-func (h *Help) renderSection(section HelpSection) string {
+// renderCompact renders a compact help view for small terminals
+func (h *Help) renderCompact() string {
+	var content strings.Builder
+
+	content.WriteString(TitleStyle.Render("Help"))
+	content.WriteString("\n")
+
+	// Show only essential shortcuts
+	essentials := []HelpItem{
+		{"1-5", "Switch view"},
+		{"↑/↓", "Navigate"},
+		{"Enter", "Select"},
+		{"?", "Toggle help"},
+		{"q", "Quit"},
+	}
+
+	for _, item := range essentials {
+		key := HelpKeyStyle.Render(item.Key)
+		desc := HelpDescStyle.Render(item.Description)
+		content.WriteString(key + " " + desc + "\n")
+	}
+
+	content.WriteString(HelpDescStyle.Render("Press ? to close"))
+
+	return content.String()
+}
+
+// renderTiny renders a minimal help view for very small terminals
+func (h *Help) renderTiny() string {
+	var content strings.Builder
+
+	content.WriteString(TitleStyle.Render("?:help"))
+	content.WriteString(" ")
+	content.WriteString(HelpDescStyle.Render("q:quit ↑↓:nav"))
+
+	return content.String()
+}
+
+// renderSection renders a help section with given width constraint
+func (h *Help) renderSection(section HelpSection, maxWidth int) string {
 	var content strings.Builder
 
 	// Section title
 	content.WriteString(SubtitleStyle.Render(section.Title))
 	content.WriteString("\n")
 
+	// Calculate key column width (shorter for narrow terminals)
+	keyWidth := 18
+	if maxWidth < 60 {
+		keyWidth = 12
+	}
+
 	// Section items
 	for _, item := range section.Items {
 		keyStyle := HelpKeyStyle.Render(item.Key)
-		descStyle := HelpDescStyle.Render(item.Description)
+
+		// Truncate description if needed
+		desc := item.Description
+		maxDescLen := maxWidth - keyWidth - 4
+		if maxDescLen > 0 && len(desc) > maxDescLen {
+			desc = desc[:maxDescLen-3] + "..."
+		}
+		descStyle := HelpDescStyle.Render(desc)
 
 		// Pad key to align descriptions
 		paddedKey := lipgloss.NewStyle().
-			Width(20).
+			Width(keyWidth).
 			Render(keyStyle)
 
 		line := lipgloss.JoinHorizontal(
