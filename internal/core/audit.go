@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/json"
 	"fmt"
-	"log/syslog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,7 +23,7 @@ type AuditEvent struct {
 // AuditLogger handles audit logging
 type AuditLogger struct {
 	filePath     string
-	syslogWriter *syslog.Writer
+	syslogWriter *syslogWriter
 	file         *os.File
 	mu           sync.Mutex
 	enabled      bool
@@ -57,21 +56,13 @@ func NewAuditLogger(filePath string, useSyslog bool, syslogServer string) (*Audi
 
 	// Setup syslog if enabled
 	if useSyslog {
-		var writer *syslog.Writer
-		var err error
-
-		if syslogServer != "" {
-			// Remote syslog
-			writer, err = syslog.Dial("udp", syslogServer, syslog.LOG_INFO|syslog.LOG_AUTH, "tunnel")
-		} else {
-			// Local syslog
-			writer, err = syslog.New(syslog.LOG_INFO|syslog.LOG_AUTH, "tunnel")
-		}
-
+		writer, err := newSyslogWriter(syslogServer)
 		if err != nil {
-			return nil, fmt.Errorf("connect to syslog: %w", err)
+			// Log warning but don't fail - syslog might not be available (e.g., Windows)
+			fmt.Fprintf(os.Stderr, "warning: syslog not available: %v\n", err)
+		} else {
+			logger.syslogWriter = writer
 		}
-		logger.syslogWriter = writer
 	}
 
 	return logger, nil
