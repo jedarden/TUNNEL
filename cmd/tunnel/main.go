@@ -93,6 +93,10 @@ func setDefaults() {
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("log_file", "")
 
+	// Web server defaults
+	viper.SetDefault("web.port", 8080)
+	viper.SetDefault("web.host", "0.0.0.0")
+
 	// SSH defaults
 	viper.SetDefault("ssh.port", 22)
 	viper.SetDefault("ssh.listen_address", "0.0.0.0")
@@ -113,11 +117,6 @@ func setDefaults() {
 	viper.SetDefault("providers.bore.server", "bore.pub")
 
 	viper.SetDefault("providers.localhost.enabled", true)
-
-	// TUI defaults
-	viper.SetDefault("tui.show_help", true)
-	viper.SetDefault("tui.refresh_interval", 1)
-	viper.SetDefault("tui.theme", "default")
 
 	// Monitoring defaults
 	viper.SetDefault("monitoring.enabled", true)

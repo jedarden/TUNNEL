@@ -1,4 +1,4 @@
-.PHONY: all build install test clean lint fmt deps dev run help vet doctor version completions
+.PHONY: all build build-frontend build-dev install test clean lint fmt deps dev run help vet doctor version completions frontend-dev
 
 # Ensure Go is in PATH
 export PATH := /usr/local/go/bin:$(PATH)
@@ -28,6 +28,8 @@ GOVET=$(GOCMD) vet
 CMD_DIR=./cmd/tunnel
 BIN_DIR=./bin
 INSTALL_DIR=$(HOME)/.local/bin
+WEB_DIR=./web
+EMBED_DIR=./internal/web/embed/dist
 
 # Default target
 all: deps fmt vet build
@@ -42,12 +44,37 @@ help:
 	@echo "Targets:"
 	@awk '/^## / {sub("## ", ""); print}' $(MAKEFILE_LIST) | column -t -s ':'
 
-## build: Build the binary
-build: deps
-	@echo "Building $(BINARY_NAME)..."
+## build-frontend: Build the React frontend
+build-frontend:
+	@echo "Building React frontend..."
+	@if [ -d "$(WEB_DIR)" ]; then \
+		cd $(WEB_DIR) && npm ci && npm run build && cd ..; \
+		echo "Copying dist to embed directory..."; \
+		rm -rf $(EMBED_DIR); \
+		mkdir -p $(EMBED_DIR); \
+		cp -r web/dist/. $(EMBED_DIR)/; \
+		echo "Frontend built successfully"; \
+	else \
+		echo "Warning: $(WEB_DIR) directory not found, skipping frontend build"; \
+		mkdir -p $(EMBED_DIR); \
+		echo '<!DOCTYPE html><html><body><h1>Frontend not built</h1><p>Run make build-frontend first.</p></body></html>' > $(EMBED_DIR)/index.html; \
+	fi
+
+## build: Build with embedded frontend (production)
+build: deps build-frontend
+	@echo "Building $(BINARY_NAME) with embedded frontend..."
 	@mkdir -p $(BIN_DIR)
 	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)
 	@echo "Built $(BIN_DIR)/$(BINARY_NAME)"
+
+## build-dev: Build without frontend (faster development builds)
+build-dev: deps
+	@echo "Building $(BINARY_NAME) (dev mode - no embedded frontend)..."
+	@mkdir -p $(EMBED_DIR)
+	@echo '<!DOCTYPE html><html><body><h1>Development Mode</h1><p>Frontend not embedded. Run make build-frontend first.</p></body></html>' > $(EMBED_DIR)/index.html
+	@mkdir -p $(BIN_DIR)
+	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)
+	@echo "Built $(BIN_DIR)/$(BINARY_NAME) (dev mode)"
 
 ## install: Install the binary to local bin
 install: build
@@ -99,10 +126,19 @@ deps:
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-## dev: Run in development mode
-dev: build
+## dev: Run in development mode (without frontend)
+dev: build-dev
 	@echo "Running $(BINARY_NAME) in dev mode..."
 	$(BIN_DIR)/$(BINARY_NAME)
+
+## frontend-dev: Run frontend dev server
+frontend-dev:
+	@if [ -d "$(WEB_DIR)" ]; then \
+		cd $(WEB_DIR) && npm run dev; \
+	else \
+		echo "$(WEB_DIR) directory not found"; \
+		exit 1; \
+	fi
 
 ## run: Build and run
 run: build
@@ -112,11 +148,14 @@ run: build
 clean:
 	@echo "Cleaning..."
 	@rm -rf $(BIN_DIR)
+	@rm -rf $(EMBED_DIR)
+	@rm -rf $(WEB_DIR)/node_modules
+	@rm -rf $(WEB_DIR)/dist
 	@rm -f coverage.out coverage.html
 	@echo "Cleaned"
 
 ## release: Build release binaries for all platforms
-release:
+release: build-frontend
 	@echo "Building release binaries..."
 	@mkdir -p $(BIN_DIR)
 	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 $(CMD_DIR)
@@ -132,16 +171,16 @@ docker:
 	docker build -t $(BINARY_NAME):$(VERSION) .
 
 ## doctor: Run diagnostic checks
-doctor: build
+doctor: build-dev
 	@echo "Running diagnostics..."
 	$(BIN_DIR)/$(BINARY_NAME) doctor
 
 ## version: Show version information
-version: build
+version: build-dev
 	$(BIN_DIR)/$(BINARY_NAME) version
 
 ## completions: Generate shell completions
-completions: build
+completions: build-dev
 	@echo "Generating shell completions..."
 	@mkdir -p completions
 	$(BIN_DIR)/$(BINARY_NAME) completions bash > completions/$(BINARY_NAME).bash

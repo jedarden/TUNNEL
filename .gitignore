@@ -41,3 +41,8 @@ logs/
 # Temporary files
 tmp/
 .tmp/
+
+# Web frontend
+web/node_modules/
+web/dist/
+internal/web/embed/dist/

@@ -2,542 +2,227 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/jedarden/tunnel/internal/core"
-	"github.com/jedarden/tunnel/internal/registry"
-	"github.com/jedarden/tunnel/pkg/config"
 	"github.com/jedarden/tunnel/pkg/version"
 )
 
-// InstanceCreatedMsg is sent when a new instance is created
-type InstanceCreatedMsg struct {
-	InstanceID   string
-	ProviderName string
-}
-
-// ViewMode represents the current active view
-type ViewMode int
+// WebServerStatus represents the state of the web server
+type WebServerStatus int
 
 const (
-	ViewDashboard ViewMode = iota
-	ViewBrowser
-	ViewConfig
-	ViewLogs
-	ViewMonitor
+	ServerStarting WebServerStatus = iota
+	ServerRunning
+	ServerError
+	ServerStopped
 )
 
-// App is the main TUI application model
+// App is the minimal TUI application model
 type App struct {
-	currentView ViewMode
-	width       int
-	height      int
-	showHelp    bool
-	showWizard  bool
-	errorMsg    string
-	errorTimer  int
+	width  int
+	height int
 
-	// Dependencies
-	registry        *registry.Registry
-	manager         *core.DefaultConnectionManager
-	appConfig       *config.Config
-	instanceManager *registry.InstanceManager
-
-	// Sub-models
-	dashboard *Dashboard
-	browser   *Browser
-	config    *Config
-	monitor   *Monitor
-	logs      *Logs
-	help      *Help
-	wizard    *Wizard
+	// Web server state
+	serverStatus  WebServerStatus
+	serverPort    int
+	serverURL     string
+	serverError   error
+	connections   int
+	browserOpened bool
 }
 
-// Message types for view switching
-type SwitchViewMsg struct {
-	view ViewMode
+// ServerStatusMsg updates the server status
+type ServerStatusMsg struct {
+	Status      WebServerStatus
+	Port        int
+	URL         string
+	Error       error
+	Connections int
 }
 
-type ToggleHelpMsg struct{}
-
-type RefreshConnectionsMsg struct{}
-
-// OpenWizardMsg requests opening the connection wizard
-type OpenWizardMsg struct {
-	ProviderName string
-}
-
-// ShowErrorMsg displays an error message
-type ShowErrorMsg struct {
-	Message string
-}
-
-// NewApp creates a new TUI application instance
-func NewApp(reg *registry.Registry, mgr *core.DefaultConnectionManager, cfg *config.Config) *App {
-	// Get manager config from manager
-	mgrConfig := core.DefaultManagerConfig()
-
-	// Create instance manager for multi-instance support
-	instanceMgr := registry.NewInstanceManager(reg)
-
+// NewApp creates a new minimal TUI application instance
+func NewApp(port int) *App {
 	return &App{
-		currentView:     ViewDashboard,
-		registry:        reg,
-		manager:         mgr,
-		appConfig:       cfg,
-		instanceManager: instanceMgr,
-		dashboard:       NewDashboard(reg, mgr, instanceMgr),
-		browser:         NewBrowser(reg),
-		config:          NewConfig(cfg, mgrConfig),
-		monitor:         NewMonitor(reg, mgr, instanceMgr),
-		logs:            NewLogs(reg),
-		help:            NewHelp(),
-		showHelp:        false,
-		width:           80,
-		height:          24,
+		width:        80,
+		height:       24,
+		serverStatus: ServerStarting,
+		serverPort:   port,
+		serverURL:    fmt.Sprintf("http://localhost:%d", port),
 	}
 }
 
 // Init initializes the application
 func (a *App) Init() tea.Cmd {
-	return a.refreshConnections()
-}
-
-// refreshConnections returns a tea.Cmd to fetch real connection data
-func (a *App) refreshConnections() tea.Cmd {
-	return func() tea.Msg {
-		return RefreshConnectionsMsg{}
-	}
+	return nil
 }
 
 // Update handles messages and updates the model
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	// Handle wizard mode first
-	if a.showWizard && a.wizard != nil {
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			// Pass to wizard
-			updatedWizard, cmd := a.wizard.Update(msg)
-			a.wizard = updatedWizard.(*Wizard)
-			return a, cmd
-
-		case WizardCompleteMsg:
-			a.showWizard = false
-			if msg.Success {
-				// Refresh connections and show success
-				a.errorMsg = ""
-				if a.dashboard != nil {
-					a.dashboard.RefreshConnections()
-				}
-				if a.monitor != nil {
-					a.monitor.RefreshConnections()
-				}
-				// Switch to monitor to see the connection
-				a.currentView = ViewMonitor
-			} else if msg.Error != nil {
-				a.errorMsg = msg.Error.Error()
-			}
-			return a, nil
-
-		case WizardCancelMsg:
-			a.showWizard = false
-			a.wizard = nil
-			return a, nil
-
-		case tea.WindowSizeMsg:
-			a.width = msg.Width
-			a.height = msg.Height
-			a.wizard.SetSize(msg.Width, msg.Height)
-			return a, nil
-		}
-		return a, nil
-	}
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Clear error message on any key
-		if a.errorMsg != "" {
-			a.errorMsg = ""
-		}
-
-		// Global key bindings
 		switch msg.String() {
 		case "ctrl+c", "q":
-			if !a.showHelp {
-				return a, tea.Quit
+			return a, tea.Quit
+
+		case "o":
+			// Open browser
+			if a.serverStatus == ServerRunning {
+				a.openBrowser()
 			}
-			a.showHelp = false
 			return a, nil
 
-		case "?":
-			a.showHelp = !a.showHelp
-			return a, nil
-
-		case "esc":
-			if a.showHelp {
-				a.showHelp = false
-				return a, nil
-			}
-
-		// Tab switching (1-5)
-		case "1":
-			a.currentView = ViewDashboard
-			return a, nil
-		case "2":
-			a.currentView = ViewBrowser
-			return a, nil
-		case "3":
-			a.currentView = ViewConfig
-			return a, nil
-		case "4":
-			a.currentView = ViewLogs
-			return a, nil
-		case "5":
-			a.currentView = ViewMonitor
-			return a, nil
-
-		// Tab navigation with Tab/Shift+Tab
-		case "tab":
-			a.currentView = (a.currentView + 1) % 5
-			return a, nil
-		case "shift+tab":
-			if a.currentView == 0 {
-				a.currentView = 4
-			} else {
-				a.currentView--
-			}
+		case "r":
+			// Refresh - could trigger a status update
 			return a, nil
 		}
 
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		// Update sub-models with new dimensions
-		a.dashboard.SetSize(msg.Width, msg.Height)
-		a.browser.SetSize(msg.Width, msg.Height)
-		a.config.SetSize(msg.Width, msg.Height)
-		a.monitor.SetSize(msg.Width, msg.Height)
-		a.logs.SetSize(msg.Width, msg.Height)
-		a.help.SetSize(msg.Width, msg.Height)
 		return a, nil
 
-	case SwitchViewMsg:
-		a.currentView = msg.view
-		return a, nil
-
-	case ToggleHelpMsg:
-		a.showHelp = !a.showHelp
-		return a, nil
-
-	case OpenWizardMsg:
-		// Create and show the wizard for the selected provider with instance manager support
-		a.wizard = NewWizardWithInstanceManager(a.registry, a.instanceManager, msg.ProviderName)
-		a.wizard.SetSize(a.width, a.height)
-		a.showWizard = true
-		return a, nil
-
-	case ShowErrorMsg:
-		a.errorMsg = msg.Message
-		return a, nil
-
-	case RefreshConnectionsMsg:
-		// Refresh connections in the dashboard and monitor
-		if a.dashboard != nil {
-			a.dashboard.RefreshConnections()
+	case ServerStatusMsg:
+		a.serverStatus = msg.Status
+		if msg.Port > 0 {
+			a.serverPort = msg.Port
+			a.serverURL = fmt.Sprintf("http://localhost:%d", msg.Port)
 		}
-		if a.monitor != nil {
-			a.monitor.RefreshConnections()
+		if msg.URL != "" {
+			a.serverURL = msg.URL
 		}
+		a.serverError = msg.Error
+		a.connections = msg.Connections
 		return a, nil
 	}
 
-	// Pass messages to active view
-	if !a.showHelp {
-		switch a.currentView {
-		case ViewDashboard:
-			updatedDashboard, cmd := a.dashboard.Update(msg)
-			a.dashboard = updatedDashboard.(*Dashboard)
-			cmds = append(cmds, cmd)
-
-		case ViewBrowser:
-			updatedBrowser, cmd := a.browser.Update(msg)
-			a.browser = updatedBrowser.(*Browser)
-			cmds = append(cmds, cmd)
-
-		case ViewConfig:
-			updatedConfig, cmd := a.config.Update(msg)
-			a.config = updatedConfig.(*Config)
-			cmds = append(cmds, cmd)
-
-		case ViewMonitor:
-			updatedMonitor, cmd := a.monitor.Update(msg)
-			a.monitor = updatedMonitor.(*Monitor)
-			cmds = append(cmds, cmd)
-
-		case ViewLogs:
-			updatedLogs, cmd := a.logs.Update(msg)
-			a.logs = updatedLogs.(*Logs)
-			cmds = append(cmds, cmd)
-		}
-	}
-
-	return a, tea.Batch(cmds...)
+	return a, nil
 }
 
 // View renders the application UI
 func (a *App) View() string {
-	// Show wizard overlay if active
-	if a.showWizard && a.wizard != nil {
-		return a.wizard.View()
-	}
-
-	if a.showHelp {
-		return a.renderHelp()
-	}
-
-	// Check for tiny terminal
-	if IsTiny(a.width, a.height) {
-		return a.renderTinyView()
-	}
-
-	var content string
-
-	// Render current view
-	switch a.currentView {
-	case ViewDashboard:
-		content = a.dashboard.View()
-	case ViewBrowser:
-		content = a.browser.View()
-	case ViewConfig:
-		content = a.config.View()
-	case ViewMonitor:
-		content = a.monitor.View()
-	case ViewLogs:
-		content = a.logs.View()
-	}
-
-	// Add error message if present
-	if a.errorMsg != "" {
-		errorBox := ErrorStyle.Render(IconCross + " " + a.errorMsg)
-		content = errorBox + "\n\n" + content
-	}
-
-	// Build the full UI based on terminal size
-	compact := IsCompact(a.width, a.height)
-
-	var header, tabs, footer string
-	if compact {
-		header = a.renderCompactHeader()
-		tabs = a.renderCompactTabs()
-		footer = a.renderCompactFooter()
-	} else {
-		header = a.renderHeader()
-		tabs = a.renderTabs()
-		footer = a.renderFooter()
-	}
-
-	// Calculate content height
-	contentHeight := a.height - lipgloss.Height(header) - lipgloss.Height(tabs) - lipgloss.Height(footer)
-
-	// Ensure content fits within available height
-	if contentHeight > 0 {
-		contentLines := strings.Split(content, "\n")
-		if len(contentLines) > contentHeight {
-			content = strings.Join(contentLines[:contentHeight], "\n")
-		}
-	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		tabs,
-		content,
-		footer,
-	)
-}
-
-// renderTinyView renders a minimal view for very small terminals
-func (a *App) renderTinyView() string {
 	var b strings.Builder
 
-	// Just show essential info with version and dimensions
-	b.WriteString(TitleStyle.Render("TUNNEL"))
-	b.WriteString(" ")
-	b.WriteString(HelpDescStyle.Render(version.Version))
-	b.WriteString(" ")
-	b.WriteString(HelpDescStyle.Render(fmt.Sprintf("[%dx%d]", a.width, a.height)))
-	b.WriteString(" ")
+	// Header
+	header := a.renderHeader()
+	b.WriteString(header)
+	b.WriteString("\n\n")
 
-	// Show current view indicator
-	views := []string{"D", "B", "C", "L", "M"}
-	for i, v := range views {
-		if ViewMode(i) == a.currentView {
-			b.WriteString(ActiveTabStyle.Render("[" + v + "]"))
-		} else {
-			b.WriteString(TabStyle.Render(v))
-		}
-	}
-	b.WriteString("\n")
+	// Server status box
+	statusBox := a.renderStatusBox()
+	b.WriteString(statusBox)
+	b.WriteString("\n\n")
 
-	// Show connection status in compact form
-	if a.registry != nil {
-		connected := a.registry.GetConnectedProviders()
-		if len(connected) > 0 {
-			b.WriteString(StatusConnectedStyle.Render(IconConnected))
-			b.WriteString(" ")
-			for i, p := range connected {
-				if i > 0 {
-					b.WriteString(",")
-				}
-				// Truncate name to first 3 chars
-				name := p.Name()
-				if len(name) > 3 {
-					name = name[:3]
-				}
-				b.WriteString(name)
-			}
-		} else {
-			b.WriteString(StatusStoppedStyle.Render(IconStopped + " No conn"))
-		}
-	}
-	b.WriteString("\n")
+	// Footer with controls
+	footer := a.renderFooter()
+	b.WriteString(footer)
 
-	// Minimal controls
-	b.WriteString(HelpDescStyle.Render("1-5:view ?:help q:quit"))
-
-	return b.String()
-}
-
-// renderCompactHeader renders a minimal header
-func (a *App) renderCompactHeader() string {
-	dims := HelpDescStyle.Render(fmt.Sprintf("[%dx%d]", a.width, a.height))
-	return TitleStyle.Render("TUNNEL") + " " + HelpDescStyle.Render(version.Version) + " " + dims
-}
-
-// renderCompactTabs renders compact tab navigation
-func (a *App) renderCompactTabs() string {
-	tabs := []string{"1:Dash", "2:Browse", "3:Cfg", "4:Log", "5:Mon"}
-	var result []string
-
-	for i, t := range tabs {
-		if ViewMode(i) == a.currentView {
-			result = append(result, ActiveTabStyle.Render(t))
-		} else {
-			result = append(result, TabStyle.Render(t))
-		}
+	// Center content vertically
+	content := b.String()
+	contentHeight := lipgloss.Height(content)
+	topPadding := (a.height - contentHeight) / 3
+	if topPadding > 0 {
+		content = strings.Repeat("\n", topPadding) + content
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Left, result...)
-}
-
-// renderCompactFooter renders a minimal footer
-func (a *App) renderCompactFooter() string {
-	return HelpDescStyle.Render("?:help q:quit ↑↓:nav")
+	// Center horizontally
+	return lipgloss.Place(
+		a.width,
+		a.height,
+		lipgloss.Center,
+		lipgloss.Top,
+		content,
+	)
 }
 
 // renderHeader renders the application header
 func (a *App) renderHeader() string {
 	title := TitleStyle.Render("TUNNEL")
-	subtitle := SubtitleStyle.Render("Terminal Unified Network Node Encrypted Link")
-	versionStr := HelpDescStyle.Render(version.Version)
-	dims := HelpDescStyle.Render(fmt.Sprintf("[%dx%d]", a.width, a.height))
-
-	header := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		title,
-		subtitle,
-		"  ",
-		versionStr,
-		" ",
-		dims,
-	)
-
-	return HeaderStyle.Width(a.width).Render(header)
+	ver := HelpDescStyle.Render(version.Version)
+	return lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", ver)
 }
 
-// renderTabs renders the tab navigation
-func (a *App) renderTabs() string {
-	tabs := []string{}
+// renderStatusBox renders the server status
+func (a *App) renderStatusBox() string {
+	var statusLine, urlLine, connectionsLine string
 
-	views := []struct {
-		name  string
-		index ViewMode
-	}{
-		{"1. Dashboard", ViewDashboard},
-		{"2. Browser", ViewBrowser},
-		{"3. Config", ViewConfig},
-		{"4. Logs", ViewLogs},
-		{"5. Monitor", ViewMonitor},
+	switch a.serverStatus {
+	case ServerStarting:
+		statusLine = StatusReadyStyle.Render(IconReady + " Starting web server...")
+
+	case ServerRunning:
+		statusLine = StatusConnectedStyle.Render(IconConnected + " Web server running")
+		urlLine = "\n\n" + InfoStyle.Render("Open in browser:") + "\n" +
+			TitleStyle.Render(a.serverURL)
+		connectionsLine = "\n\n" + HelpDescStyle.Render(fmt.Sprintf("Active connections: %d", a.connections))
+
+	case ServerError:
+		statusLine = StatusStoppedStyle.Render(IconCross + " Server error")
+		if a.serverError != nil {
+			urlLine = "\n\n" + ErrorStyle.Render(a.serverError.Error())
+		}
+
+	case ServerStopped:
+		statusLine = StatusStoppedStyle.Render(IconStopped + " Server stopped")
 	}
 
-	for _, v := range views {
-		if a.currentView == v.index {
-			tabs = append(tabs, ActiveTabStyle.Render(v.name))
-		} else {
-			tabs = append(tabs, TabStyle.Render(v.name))
+	content := statusLine + urlLine + connectionsLine
+
+	// Create a centered box
+	boxWidth := 50
+	if a.width < 60 {
+		boxWidth = a.width - 4
+	}
+
+	return BoxStyle.
+		Width(boxWidth).
+		Align(lipgloss.Center).
+		Render(content)
+}
+
+// renderFooter renders the control hints
+func (a *App) renderFooter() string {
+	var hints []string
+
+	if a.serverStatus == ServerRunning {
+		hints = append(hints, HelpKeyStyle.Render("o")+HelpDescStyle.Render(" open browser"))
+	}
+	hints = append(hints, HelpKeyStyle.Render("q")+HelpDescStyle.Render(" quit"))
+
+	return lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		strings.Join(hints, HelpSeparatorStyle.Render("  •  ")),
+	)
+}
+
+// openBrowser opens the server URL in the default browser
+func (a *App) openBrowser() error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", a.serverURL)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", a.serverURL)
+	default: // Linux and others
+		cmd = exec.Command("xdg-open", a.serverURL)
+	}
+
+	a.browserOpened = true
+	return cmd.Start()
+}
+
+// SetServerStatus updates the server status (called from main)
+func (a *App) SetServerStatus(status WebServerStatus, err error, connections int) tea.Cmd {
+	return func() tea.Msg {
+		return ServerStatusMsg{
+			Status:      status,
+			Port:        a.serverPort,
+			Connections: connections,
+			Error:       err,
 		}
 	}
-
-	tabBar := lipgloss.JoinHorizontal(lipgloss.Left, tabs...)
-	separator := strings.Repeat("─", a.width)
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		tabBar,
-		lipgloss.NewStyle().Foreground(ColorBorder).Render(separator),
-	)
-}
-
-// renderFooter renders the application footer with help hint
-func (a *App) renderFooter() string {
-	helpHint := HelpKeyStyle.Render("?") + HelpDescStyle.Render(" help")
-	quitHint := HelpKeyStyle.Render("q") + HelpDescStyle.Render(" quit")
-	tabHint := HelpKeyStyle.Render("1-5") + HelpDescStyle.Render(" switch view")
-
-	hints := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		helpHint,
-		HelpSeparatorStyle.Render(" • "),
-		tabHint,
-		HelpSeparatorStyle.Render(" • "),
-		quitHint,
-	)
-
-	return FooterStyle.Width(a.width).Render(hints)
-}
-
-// renderHelp renders the help overlay
-func (a *App) renderHelp() string {
-	return a.help.View()
-}
-
-// renderPlaceholder renders a placeholder view for unimplemented features
-func (a *App) renderPlaceholder(title, message string) string {
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
-		TitleStyle.Render(title),
-		"",
-		InfoStyle.Render(message),
-		"",
-		HelpDescStyle.Render("Press any number (1-5) to switch views"),
-	)
-
-	// Center the content
-	verticalPadding := (a.height - lipgloss.Height(content)) / 2
-	if verticalPadding > 0 {
-		padding := strings.Repeat("\n", verticalPadding)
-		content = padding + content
-	}
-
-	return lipgloss.Place(
-		a.width,
-		a.height-6, // Account for header, tabs, footer
-		lipgloss.Center,
-		lipgloss.Center,
-		content,
-	)
 }

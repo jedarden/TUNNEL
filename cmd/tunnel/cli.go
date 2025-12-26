@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,11 +17,19 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fatih/color"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/jedarden/tunnel/internal/providers"
 	"github.com/jedarden/tunnel/internal/registry"
 	"github.com/jedarden/tunnel/internal/tui"
+	"github.com/jedarden/tunnel/internal/web/api"
+	embeddedfs "github.com/jedarden/tunnel/internal/web/embed"
+	"github.com/jedarden/tunnel/internal/web/middleware"
 	"github.com/jedarden/tunnel/pkg/config"
+	"github.com/jedarden/tunnel/pkg/tunnel"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -27,10 +38,13 @@ var (
 	cfgFile    string
 	verbose    bool
 	jsonOutput bool
+	webPort    int
 
-	manager    *core.DefaultConnectionManager
-	reg        *registry.Registry
-	keyManager *core.FileKeyManager
+	manager       *core.DefaultConnectionManager
+	reg           *registry.Registry
+	keyManager    *core.FileKeyManager
+	tunnelManager *tunnel.Manager
+	tunnelReg     *tunnel.Registry
 )
 
 // appConfig holds the loaded application configuration (used during initialization)
@@ -74,6 +88,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.config/tunnel/config.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output in JSON format")
+	rootCmd.PersistentFlags().IntVarP(&webPort, "port", "p", 8080, "web server port")
 
 	// Add all subcommands
 	rootCmd.AddCommand(startCmd)
@@ -81,7 +96,6 @@ func init() {
 	rootCmd.AddCommand(restartCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(listCmd)
-	rootCmd.AddCommand(configureCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(authCmd)
 	rootCmd.AddCommand(keysCmd)
@@ -199,19 +213,6 @@ var listCmd = &cobra.Command{
 	Long:  `List all available tunnel methods and their current status.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return listMethods()
-	},
-}
-
-var configureCmd = &cobra.Command{
-	Use:   "configure <method>",
-	Short: "Configure a tunnel method interactively",
-	Long:  `Configure a tunnel method through an interactive prompt.`,
-	Example: `  tunnel configure cloudflared
-  tunnel configure ngrok`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		method := args[0]
-		return configureMethod(method)
 	},
 }
 
@@ -515,21 +516,160 @@ func init() {
 
 func launchTUI(ctx context.Context) error {
 	if verbose {
-		fmt.Println("Launching TUI...")
+		fmt.Println("Launching tunnel with web server...")
 	}
 
-	// Create the TUI application
-	app := tui.NewApp(reg, manager, appConfig)
+	// Create the minimal TUI application
+	tuiApp := tui.NewApp(webPort)
 
 	// Create and run the Bubble Tea program
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(tuiApp, tea.WithAltScreen())
 
-	// Run the program
+	// Channel to signal web server started
+	serverReady := make(chan error, 1)
+
+	// Start web server in background
+	go func() {
+		if err := startWebServer(ctx, p); err != nil {
+			serverReady <- err
+		}
+		close(serverReady)
+	}()
+
+	// Wait a moment for server to start, then update TUI
+	go func() {
+		select {
+		case err := <-serverReady:
+			if err != nil {
+				p.Send(tui.ServerStatusMsg{
+					Status: tui.ServerError,
+					Port:   webPort,
+					Error:  err,
+				})
+			}
+		case <-time.After(500 * time.Millisecond):
+			// Server likely started successfully
+			p.Send(tui.ServerStatusMsg{
+				Status: tui.ServerRunning,
+				Port:   webPort,
+			})
+		}
+	}()
+
+	// Run the TUI program
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("failed to run TUI: %w", err)
 	}
 
 	return nil
+}
+
+// startWebServer starts the Fiber web server with the API and embedded frontend
+func startWebServer(ctx context.Context, p *tea.Program) error {
+	// Create tunnel manager and registry for the API
+	tunnelReg = tunnel.NewRegistry()
+	tunnelManager = tunnel.NewManager(nil) // Use default config
+
+	// Create API server
+	apiServer := api.NewServer(&api.ServerConfig{
+		Manager:  tunnelManager,
+		Registry: tunnelReg,
+		Logger:   log.Default(),
+		DevMode:  false,
+	})
+
+	// Create Fiber app
+	app := fiber.New(fiber.Config{
+		DisableStartupMessage: true,
+		ErrorHandler: func(c *fiber.Ctx, err error) error {
+			code := fiber.StatusInternalServerError
+			if e, ok := err.(*fiber.Error); ok {
+				code = e.Code
+			}
+			return c.Status(code).JSON(fiber.Map{
+				"error": err.Error(),
+			})
+		},
+	})
+
+	// Middleware
+	app.Use(recover.New())
+	app.Use(compress.New(compress.Config{
+		Level: compress.LevelBestSpeed,
+	}))
+	app.Use(middleware.RequestLogger())
+
+	// Setup API routes
+	api.SetupRoutes(app, apiServer)
+
+	// Serve embedded frontend
+	staticFS, err := embeddedfs.GetFS()
+	if err != nil {
+		// Frontend not embedded (development mode)
+		if verbose {
+			fmt.Println("Frontend not embedded, API-only mode")
+		}
+	} else {
+		// Serve static files from embedded filesystem
+		app.Use("/", filesystem.New(filesystem.Config{
+			Root:         http.FS(staticFS),
+			Browse:       false,
+			Index:        "index.html",
+			NotFoundFile: "index.html", // SPA fallback
+		}))
+	}
+
+	// Run server (blocks until shutdown)
+	go func() {
+		<-ctx.Done()
+		_ = app.Shutdown()
+	}()
+
+	// Try to start server, auto-incrementing port if in use
+	actualPort := webPort
+	maxAttempts := 10
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		addr := fmt.Sprintf(":%d", actualPort)
+
+		// Check if port is available
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			if verbose {
+				fmt.Printf("Port %d in use, trying %d...\n", actualPort, actualPort+1)
+			}
+			actualPort++
+			continue
+		}
+		listener.Close()
+
+		// Port is available - notify TUI of the actual port
+		if actualPort != webPort {
+			p.Send(tui.ServerStatusMsg{
+				Status: tui.ServerRunning,
+				Port:   actualPort,
+				URL:    fmt.Sprintf("http://localhost:%d", actualPort),
+			})
+		}
+
+		if verbose {
+			fmt.Printf("Starting web server on http://localhost:%d\n", actualPort)
+		}
+
+		return app.Listen(addr)
+	}
+
+	return fmt.Errorf("could not find available port after %d attempts (tried %d-%d)", maxAttempts, webPort, actualPort-1)
+}
+
+// Fallback for when embedded filesystem doesn't exist (dev mode)
+func serveStaticFallback(app *fiber.App, staticFS fs.FS) {
+	app.Use("/", filesystem.New(filesystem.Config{
+		Root:         http.FS(staticFS),
+		Browse:       false,
+		Index:        "index.html",
+		NotFoundFile: "index.html",
+	}))
 }
 
 func startConnection(method string) error {
@@ -952,191 +1092,6 @@ func displayProviderInfo(info registry.ProviderInfo) {
 	}
 
 	fmt.Printf("  %-15s - %-20s%s\n", info.Name, installedStatus, connectedStatus)
-}
-
-func configureMethod(method string) error {
-	if verbose {
-		fmt.Printf("Configuring method: %s\n", method)
-	}
-
-	// Check if provider exists
-	provider, err := reg.GetProvider(method)
-	if err != nil {
-		return fmt.Errorf("provider not found: %s", method)
-	}
-
-	// Check if installed
-	if !provider.IsInstalled() {
-		return fmt.Errorf("%s is not installed. Please install it first", method)
-	}
-
-	color.Cyan("=== Configure %s ===", method)
-	fmt.Println()
-
-	// Get home directory for credential storage
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	// Create credential store
-	credStore, err := NewCredentialStore(
-		"file",
-		"tunnel",
-		filepath.Join(homeDir, ".config", "tunnel", "credentials"),
-		"tunnel-credentials", // passphrase - in production, this should be more secure
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create credential store: %w", err)
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-
-	// Provider-specific configuration prompts
-	switch method {
-	case "tailscale":
-		fmt.Println("Tailscale Configuration")
-		fmt.Println("----------------------")
-
-		fmt.Print("Auth Key (optional, press Enter to skip): ")
-		authKey, _ := reader.ReadString('\n')
-		authKey = strings.TrimSpace(authKey)
-		if authKey != "" {
-			if err := credStore.Set(method, "auth_key", []byte(authKey)); err != nil {
-				return fmt.Errorf("failed to store auth key: %w", err)
-			}
-		}
-
-		fmt.Print("Hostname (optional, press Enter to skip): ")
-		hostname, _ := reader.ReadString('\n')
-		hostname = strings.TrimSpace(hostname)
-		if hostname != "" {
-			if err := credStore.Set(method, "hostname", []byte(hostname)); err != nil {
-				return fmt.Errorf("failed to store hostname: %w", err)
-			}
-		}
-
-		color.Green("✓ Tailscale configured successfully")
-
-	case "wireguard":
-		fmt.Println("WireGuard Configuration")
-		fmt.Println("----------------------")
-
-		fmt.Print("Interface Name (e.g., wg0): ")
-		interfaceName, _ := reader.ReadString('\n')
-		interfaceName = strings.TrimSpace(interfaceName)
-		if interfaceName == "" {
-			interfaceName = "wg0"
-		}
-		if err := credStore.Set(method, "interface", []byte(interfaceName)); err != nil {
-			return fmt.Errorf("failed to store interface: %w", err)
-		}
-
-		fmt.Print("Config File Path (e.g., /etc/wireguard/wg0.conf): ")
-		configPath, _ := reader.ReadString('\n')
-		configPath = strings.TrimSpace(configPath)
-		if configPath != "" {
-			if err := credStore.Set(method, "config_path", []byte(configPath)); err != nil {
-				return fmt.Errorf("failed to store config path: %w", err)
-			}
-		}
-
-		color.Green("✓ WireGuard configured successfully")
-
-	case "cloudflare", "cloudflared":
-		fmt.Println("Cloudflare Tunnel Configuration")
-		fmt.Println("-------------------------------")
-
-		fmt.Print("Tunnel Token: ")
-		token, _ := reader.ReadString('\n')
-		token = strings.TrimSpace(token)
-		if token == "" {
-			return fmt.Errorf("tunnel token is required")
-		}
-		if err := credStore.Set(method, "tunnel_token", []byte(token)); err != nil {
-			return fmt.Errorf("failed to store tunnel token: %w", err)
-		}
-
-		color.Green("✓ Cloudflare Tunnel configured successfully")
-
-	case "ngrok":
-		fmt.Println("ngrok Configuration")
-		fmt.Println("------------------")
-
-		fmt.Print("Auth Token: ")
-		authToken, _ := reader.ReadString('\n')
-		authToken = strings.TrimSpace(authToken)
-		if authToken == "" {
-			return fmt.Errorf("auth token is required")
-		}
-		if err := credStore.Set(method, "auth_token", []byte(authToken)); err != nil {
-			return fmt.Errorf("failed to store auth token: %w", err)
-		}
-
-		fmt.Print("Region (us, eu, ap, au, sa, jp, in - press Enter for us): ")
-		region, _ := reader.ReadString('\n')
-		region = strings.TrimSpace(region)
-		if region == "" {
-			region = "us"
-		}
-		if err := credStore.Set(method, "region", []byte(region)); err != nil {
-			return fmt.Errorf("failed to store region: %w", err)
-		}
-
-		color.Green("✓ ngrok configured successfully")
-
-	case "zerotier":
-		fmt.Println("ZeroTier Configuration")
-		fmt.Println("---------------------")
-
-		fmt.Print("Network ID: ")
-		networkID, _ := reader.ReadString('\n')
-		networkID = strings.TrimSpace(networkID)
-		if networkID == "" {
-			return fmt.Errorf("network ID is required")
-		}
-		if err := credStore.Set(method, "network_id", []byte(networkID)); err != nil {
-			return fmt.Errorf("failed to store network ID: %w", err)
-		}
-
-		color.Green("✓ ZeroTier configured successfully")
-
-	case "bore":
-		fmt.Println("bore Configuration")
-		fmt.Println("-----------------")
-
-		fmt.Print("Server Address (press Enter for bore.pub): ")
-		serverAddr, _ := reader.ReadString('\n')
-		serverAddr = strings.TrimSpace(serverAddr)
-		if serverAddr == "" {
-			serverAddr = "bore.pub"
-		}
-		if err := credStore.Set(method, "server", []byte(serverAddr)); err != nil {
-			return fmt.Errorf("failed to store server: %w", err)
-		}
-
-		fmt.Print("Port (press Enter for 22): ")
-		portStr, _ := reader.ReadString('\n')
-		portStr = strings.TrimSpace(portStr)
-		if portStr == "" {
-			portStr = "22"
-		}
-		if err := credStore.Set(method, "port", []byte(portStr)); err != nil {
-			return fmt.Errorf("failed to store port: %w", err)
-		}
-
-		color.Green("✓ bore configured successfully")
-
-	default:
-		color.Yellow("No specific configuration prompts available for: %s", method)
-		fmt.Println("You can still use 'tunnel auth set-key' to set API keys if needed.")
-	}
-
-	fmt.Println()
-	fmt.Printf("Configuration saved to: %s\n",
-		color.CyanString(filepath.Join(homeDir, ".config", "tunnel", "credentials")))
-
-	return nil
 }
 
 // NewCredentialStore creates a credential store (helper function)
