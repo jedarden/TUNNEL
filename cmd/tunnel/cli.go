@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fatih/color"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -24,7 +22,6 @@ import (
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/jedarden/tunnel/internal/providers"
 	"github.com/jedarden/tunnel/internal/registry"
-	"github.com/jedarden/tunnel/internal/tui"
 	"github.com/jedarden/tunnel/internal/web/api"
 	embeddedfs "github.com/jedarden/tunnel/internal/web/embed"
 	"github.com/jedarden/tunnel/internal/web/middleware"
@@ -59,12 +56,13 @@ func Execute(ctx context.Context) error {
 var rootCmd = &cobra.Command{
 	Use:   "tunnel",
 	Short: "Terminal Unified Network Node Encrypted Link - SSH access management",
-	Long: `TUNNEL (Terminal Unified Network Node Encrypted Link) is a TUI application
-for managing SSH access through various tunnel providers including Cloudflare Tunnel,
-ngrok, Tailscale, bore, and localhost.run.
+	Long: `TUNNEL (Terminal Unified Network Node Encrypted Link) manages SSH access
+through various tunnel providers including Cloudflare Tunnel, ngrok, Tailscale,
+bore, and localhost.run.
 
-By default, running 'tunnel' without arguments launches the interactive TUI.`,
-	Example: `  # Launch interactive TUI
+By default, running 'tunnel' without arguments launches the embedded web server
+for configuration management. The web interface is forwarded to the user's device.`,
+	Example: `  # Launch web server for configuration
   tunnel
 
   # Start a specific tunnel method
@@ -76,8 +74,8 @@ By default, running 'tunnel' without arguments launches the interactive TUI.`,
   # Configure a tunnel method
   tunnel configure ngrok`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Launch TUI by default
-		return launchTUI(cmd.Context())
+		// Launch web server by default
+		return launchWebServer(cmd.Context())
 	},
 }
 
@@ -514,58 +512,12 @@ func init() {
 
 // Implementation functions
 
-func launchTUI(ctx context.Context) error {
+// launchWebServer starts the embedded web server for configuration management
+func launchWebServer(ctx context.Context) error {
 	if verbose {
-		fmt.Println("Launching tunnel with web server...")
+		fmt.Println("Launching tunnel web server...")
 	}
 
-	// Create the minimal TUI application
-	tuiApp := tui.NewApp(webPort)
-
-	// Create and run the Bubble Tea program
-	p := tea.NewProgram(tuiApp, tea.WithAltScreen())
-
-	// Channel to signal web server started
-	serverReady := make(chan error, 1)
-
-	// Start web server in background
-	go func() {
-		if err := startWebServer(ctx, p); err != nil {
-			serverReady <- err
-		}
-		close(serverReady)
-	}()
-
-	// Wait a moment for server to start, then update TUI
-	go func() {
-		select {
-		case err := <-serverReady:
-			if err != nil {
-				p.Send(tui.ServerStatusMsg{
-					Status: tui.ServerError,
-					Port:   webPort,
-					Error:  err,
-				})
-			}
-		case <-time.After(500 * time.Millisecond):
-			// Server likely started successfully
-			p.Send(tui.ServerStatusMsg{
-				Status: tui.ServerRunning,
-				Port:   webPort,
-			})
-		}
-	}()
-
-	// Run the TUI program
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("failed to run TUI: %w", err)
-	}
-
-	return nil
-}
-
-// startWebServer starts the Fiber web server with the API and embedded frontend
-func startWebServer(ctx context.Context, p *tea.Program) error {
 	// Create tunnel manager and registry for the API
 	tunnelReg = tunnel.NewRegistry()
 	tunnelManager = tunnel.NewManager(nil) // Use default config
@@ -619,12 +571,6 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 		}))
 	}
 
-	// Run server (blocks until shutdown)
-	go func() {
-		<-ctx.Done()
-		_ = app.Shutdown()
-	}()
-
 	// Try to start server, auto-incrementing port if in use
 	actualPort := webPort
 	maxAttempts := 10
@@ -643,33 +589,24 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 		}
 		listener.Close()
 
-		// Port is available - notify TUI of the actual port
-		if actualPort != webPort {
-			p.Send(tui.ServerStatusMsg{
-				Status: tui.ServerRunning,
-				Port:   actualPort,
-				URL:    fmt.Sprintf("http://localhost:%d", actualPort),
-			})
-		}
+		// Port is available
+		color.Green("TUNNEL web server starting on http://localhost:%d", actualPort)
+		fmt.Println("Press Ctrl+C to stop the server")
+		fmt.Println()
+		color.Cyan("Configuration is managed via the web interface.")
+		fmt.Println("The web interface is forwarded to your device for easy access.")
 
-		if verbose {
-			fmt.Printf("Starting web server on http://localhost:%d\n", actualPort)
-		}
+		// Handle graceful shutdown
+		go func() {
+			<-ctx.Done()
+			fmt.Println("\nShutting down web server...")
+			_ = app.Shutdown()
+		}()
 
 		return app.Listen(addr)
 	}
 
 	return fmt.Errorf("could not find available port after %d attempts (tried %d-%d)", maxAttempts, webPort, actualPort-1)
-}
-
-// Fallback for when embedded filesystem doesn't exist (dev mode)
-func serveStaticFallback(app *fiber.App, staticFS fs.FS) {
-	app.Use("/", filesystem.New(filesystem.Config{
-		Root:         http.FS(staticFS),
-		Browse:       false,
-		Index:        "index.html",
-		NotFoundFile: "index.html",
-	}))
 }
 
 func startConnection(method string) error {

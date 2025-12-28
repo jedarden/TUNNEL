@@ -2,17 +2,17 @@
 
 **T**erminal **U**nified **N**etwork **N**ode **E**ncrypted **L**ink
 
-A TUI (Terminal User Interface) application for managing secure SSH access to devpods and containers through multiple connection methods with built-in redundancy.
+A CLI application for managing secure SSH access to devpods and containers through multiple connection methods with built-in redundancy. Configuration is managed via an embedded web interface that is forwarded to the user's device.
 
 ## Features
 
-- **Unified Interface**: Single TUI for all remote access methods
+- **Web Interface**: Embedded web server for configuration management, forwarded to user's device
 - **Multi-Method Redundancy**: Run multiple connection methods simultaneously for failover
 - **Provider Support**: Tailscale, Cloudflare Tunnel, WireGuard, ngrok, ZeroTier, bore, and more
 - **Connection Monitoring**: Real-time status, metrics, and health checks
 - **Credential Management**: Secure storage via system keyring
 - **Key Management**: SSH key import from GitHub, validation, and rotation
-- **Guided Setup**: Step-by-step wizards for each provider
+- **REST API**: Full-featured API for automation and integration
 
 ## Supported Connection Methods
 
@@ -41,11 +41,17 @@ go install github.com/jedarden/tunnel/cmd/tunnel@latest
 
 ## Usage
 
-### Launch TUI
+### Launch Web Server
 
 ```bash
+# Start the web interface (default)
 tunnel
+
+# Specify a custom port
+tunnel --port 9000
 ```
+
+The web interface will be available at `http://localhost:8080` (or specified port) and provides full configuration management capabilities.
 
 ### CLI Commands
 
@@ -86,7 +92,10 @@ settings:
   default_method: tailscale
   auto_reconnect: true
   log_level: info
-  theme: dark
+
+web:
+  port: 8080
+  host: 0.0.0.0
 
 methods:
   tailscale:
@@ -112,9 +121,9 @@ monitoring:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                           TUNNEL TUI                             │
+│                      TUNNEL Web Interface                        │
 ├─────────────────────────────────────────────────────────────────┤
-│  Dashboard  │  Methods  │  Config  │  Logs  │  Monitor          │
+│                    REST API (Fiber + WebSocket)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Core Application Logic                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
@@ -161,6 +170,19 @@ tunnel keys list
 tunnel keys revoke <key-id>
 ```
 
+## API Endpoints
+
+The embedded web server provides the following REST API:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/providers` | List all providers |
+| GET | `/api/providers/:name` | Get provider details |
+| POST | `/api/providers/:name/connect` | Connect provider |
+| POST | `/api/providers/:name/disconnect` | Disconnect provider |
+| GET | `/api/providers/:name/status` | Get provider status |
+| POST | `/api/providers/:name/health` | Health check |
+
 ## Development
 
 ### Prerequisites
@@ -183,10 +205,10 @@ make install    # Install to /usr/local/bin
 tunnel/
 ├── cmd/tunnel/          # CLI entry point
 ├── internal/
-│   ├── tui/             # TUI components (Bubbletea)
 │   ├── core/            # Core logic (connection, credentials)
 │   ├── providers/       # Provider adapters
-│   └── system/          # System utilities
+│   ├── web/             # Web API and embedded frontend
+│   └── registry/        # Provider registry
 ├── pkg/config/          # Configuration management
 ├── configs/             # Default configuration files
 └── docs/                # Documentation
