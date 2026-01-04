@@ -5,10 +5,14 @@ import (
 	"sync"
 
 	"github.com/jedarden/tunnel/internal/providers"
+	"github.com/jedarden/tunnel/internal/providers/bastion"
 	"github.com/jedarden/tunnel/internal/providers/bore"
 	"github.com/jedarden/tunnel/internal/providers/cloudflare"
 	"github.com/jedarden/tunnel/internal/providers/ngrok"
+	"github.com/jedarden/tunnel/internal/providers/reversessh"
+	"github.com/jedarden/tunnel/internal/providers/sshforward"
 	"github.com/jedarden/tunnel/internal/providers/tailscale"
+	"github.com/jedarden/tunnel/internal/providers/vscodetunnel"
 	"github.com/jedarden/tunnel/internal/providers/wireguard"
 	"github.com/jedarden/tunnel/internal/providers/zerotier"
 )
@@ -39,6 +43,12 @@ func (r *Registry) registerDefaultProviders() {
 	r.Register(cloudflare.New())
 	r.Register(ngrok.New())
 	r.Register(bore.New())
+
+	// SSH providers
+	r.Register(vscodetunnel.New())
+	r.Register(sshforward.New())
+	r.Register(reversessh.New())
+	r.Register(bastion.New())
 }
 
 // Register adds a provider to the registry

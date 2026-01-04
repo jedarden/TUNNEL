@@ -11,6 +11,7 @@ const (
 	CategoryVPN    Category = "vpn"
 	CategoryTunnel Category = "tunnel"
 	CategoryDirect Category = "direct"
+	CategorySSH    Category = "ssh"
 )
 
 // Provider defines the interface that all network providers must implement
