@@ -19,6 +19,7 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	providers.Post("/:name/connect", server.connectProvider)
 	providers.Post("/:name/disconnect", server.disconnectProvider)
 	providers.Get("/:name/health", server.providerHealthCheck)
+	providers.Post("/:name/health", server.providerHealthCheckWithConfig)
 
 	// Connection routes
 	connections := api.Group("/connections")

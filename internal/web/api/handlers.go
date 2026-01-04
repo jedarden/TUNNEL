@@ -163,6 +163,47 @@ func (s *Server) providerHealthCheck(c *fiber.Ctx) error {
 	return c.JSON(health)
 }
 
+func (s *Server) providerHealthCheckWithConfig(c *fiber.Ctx) error {
+	name := c.Params("name")
+
+	provider, err := s.registry.GetProvider(name)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, fmt.Sprintf("Provider %s not found", name))
+	}
+
+	// Parse config from request body
+	var config tunnel.ProviderConfig
+	if err := c.BodyParser(&config); err != nil {
+		// If no config provided, just do a basic health check
+		health, err := provider.HealthCheck()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("Health check failed: %v", err))
+		}
+		return c.JSON(health)
+	}
+
+	// Configure provider temporarily for health check
+	if err := provider.Configure(&config); err != nil {
+		return c.JSON(fiber.Map{
+			"healthy": false,
+			"status":  "configuration_error",
+			"message": fmt.Sprintf("Configuration error: %v", err),
+		})
+	}
+
+	// Perform health check with the configuration
+	health, err := provider.HealthCheck()
+	if err != nil {
+		return c.JSON(fiber.Map{
+			"healthy": false,
+			"status":  "unhealthy",
+			"message": fmt.Sprintf("Health check failed: %v", err),
+		})
+	}
+
+	return c.JSON(health)
+}
+
 // Connection handlers
 
 func (s *Server) listConnections(c *fiber.Ctx) error {
