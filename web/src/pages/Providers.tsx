@@ -1,11 +1,13 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUpDown } from 'lucide-react'
 import { ProviderCard } from '@/components/providers/ProviderCard'
 import { ProviderDetail } from '@/components/providers/ProviderDetail'
 import { ProviderSearch } from '@/components/providers/ProviderSearch'
 import { CategoryTabs } from '@/components/providers/CategoryTabs'
+import { ProviderConfigModal, type ProviderInstance } from '@/components/providers/ProviderConfigModal'
 import { cn } from '@/lib/utils'
+import { useUIStore } from '@/stores/ui'
 import type { ProviderInfo, ProviderCategory } from '@/types'
 
 // Mock provider data
@@ -188,12 +190,16 @@ const mockProviders: ProviderInfo[] = [
 type SortOption = 'name' | 'status' | 'latency'
 
 export function Providers() {
+  const { addNotification } = useUIStore()
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'connected' | 'available'>('all')
   const [activeCategory, setActiveCategory] = useState<ProviderCategory>('all')
   const [sortBy, setSortBy] = useState<SortOption>('name')
   const [selectedProvider, setSelectedProvider] = useState<ProviderInfo | null>(null)
   const [isDetailOpen, setIsDetailOpen] = useState(false)
+  const [isConfigOpen, setIsConfigOpen] = useState(false)
+  const [configProvider, setConfigProvider] = useState<ProviderInfo | null>(null)
+  const [providerInstances, setProviderInstances] = useState<Record<string, ProviderInstance[]>>({})
 
   // In a real app, this would fetch from the API
   const { data: providers = mockProviders, isLoading } = useQuery({
@@ -265,19 +271,87 @@ export function Providers() {
   }, [providers])
 
   const handleConfigure = (provider: ProviderInfo) => {
-    console.log('Configure provider:', provider.id)
-    // TODO: Navigate to configuration page or open config modal
+    setConfigProvider(provider)
+    setIsConfigOpen(true)
   }
 
-  const handleConnect = (provider: ProviderInfo) => {
-    console.log('Connect to provider:', provider.id)
-    // TODO: Initiate connection
+  const handleConnect = async (provider: ProviderInfo) => {
+    // Get the default instance for this provider
+    const instances = providerInstances[provider.id] || []
+    const defaultInstance = instances.find((i) => i.isDefault) || instances[0]
+
+    if (!defaultInstance || Object.keys(defaultInstance.config).length === 0) {
+      // No configuration, open config modal first
+      addNotification('warning', 'Configuration Required', `Please configure ${provider.name} before connecting.`)
+      handleConfigure(provider)
+      return
+    }
+
+    try {
+      // Call the connect API
+      const response = await fetch(`/api/providers/${provider.id}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(defaultInstance.config),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.message || 'Connection failed')
+      }
+
+      addNotification('success', 'Connected', `Successfully connected to ${provider.name}`)
+    } catch (error) {
+      addNotification('error', 'Connection Failed', error instanceof Error ? error.message : 'Failed to connect')
+    }
+  }
+
+  const handleSaveConfig = async (providerId: string, instances: ProviderInstance[]) => {
+    // Save instances to state (in a real app, this would persist to backend)
+    setProviderInstances((prev) => ({
+      ...prev,
+      [providerId]: instances,
+    }))
+
+    // Also save to localStorage for persistence
+    const allInstances = {
+      ...providerInstances,
+      [providerId]: instances,
+    }
+    localStorage.setItem('tunnel-provider-instances', JSON.stringify(allInstances))
+
+    addNotification('success', 'Configuration Saved', 'Provider configuration has been saved.')
+  }
+
+  const handleTestConnection = async (providerId: string, config: Record<string, unknown>): Promise<boolean> => {
+    try {
+      const response = await fetch(`/api/providers/${providerId}/health`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      return response.ok
+    } catch {
+      return false
+    }
   }
 
   const handleViewDetails = (provider: ProviderInfo) => {
     setSelectedProvider(provider)
     setIsDetailOpen(true)
   }
+
+  // Load saved instances from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('tunnel-provider-instances')
+    if (saved) {
+      try {
+        setProviderInstances(JSON.parse(saved))
+      } catch {
+        // Ignore invalid JSON
+      }
+    }
+  }, [])
 
   const sortOptions: Array<{ value: SortOption; label: string }> = [
     { value: 'name', label: 'Name' },
@@ -376,6 +450,19 @@ export function Providers() {
         onClose={() => setIsDetailOpen(false)}
         onConfigure={handleConfigure}
         onConnect={handleConnect}
+      />
+
+      {/* Provider Configuration Modal */}
+      <ProviderConfigModal
+        provider={configProvider}
+        isOpen={isConfigOpen}
+        onClose={() => {
+          setIsConfigOpen(false)
+          setConfigProvider(null)
+        }}
+        onSave={handleSaveConfig}
+        onTestConnection={handleTestConnection}
+        existingInstances={configProvider ? providerInstances[configProvider.id] : []}
       />
     </div>
   )
