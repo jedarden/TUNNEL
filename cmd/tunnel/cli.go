@@ -25,6 +25,7 @@ import (
 	"github.com/jedarden/tunnel/internal/providers"
 	"github.com/jedarden/tunnel/internal/registry"
 	"github.com/jedarden/tunnel/internal/tui"
+	"github.com/jedarden/tunnel/internal/upgrade"
 	"github.com/jedarden/tunnel/internal/web/api"
 	embeddedfs "github.com/jedarden/tunnel/internal/web/embed"
 	"github.com/jedarden/tunnel/internal/web/middleware"
@@ -517,6 +518,31 @@ func init() {
 func launchTUI(ctx context.Context) error {
 	if verbose {
 		fmt.Println("Launching tunnel with web server...")
+	}
+
+	// Start the hot-swap binary watcher
+	upgradeWatcher, err := upgrade.NewWatcher(log.Default())
+	if err != nil {
+		// Log but don't fail - hot-swap is optional
+		if verbose {
+			fmt.Printf("Warning: Could not start upgrade watcher: %v\n", err)
+		}
+	} else {
+		if err := upgradeWatcher.Start(func() {
+			// Cleanup callback before restart
+			if verbose {
+				fmt.Println("Preparing for binary upgrade...")
+			}
+			// Give web server time to complete pending requests
+			time.Sleep(500 * time.Millisecond)
+		}); err != nil {
+			if verbose {
+				fmt.Printf("Warning: Could not start upgrade watcher: %v\n", err)
+			}
+		} else if verbose {
+			fmt.Printf("Hot-swap watcher started for: %s\n", upgradeWatcher.GetBinaryPath())
+		}
+		defer upgradeWatcher.Stop()
 	}
 
 	// Create the minimal TUI application

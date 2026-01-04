@@ -351,73 +351,320 @@ export function ProviderConfigModal({
         )
 
       case 'wireguard':
+        return (
+          <>
+            <FormField>
+              <Label htmlFor="wg-listen-port" description="UDP port for WireGuard to listen on">
+                Listen Port
+              </Label>
+              <Input
+                id="wg-listen-port"
+                type="number"
+                value={(config.listenPort as number) || 51820}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'listenPort', parseInt(e.target.value) || 51820)
+                }
+                placeholder="51820"
+              />
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="wg-private-key" required description="WireGuard private key for this server">
+                Private Key
+              </Label>
+              <div className="relative">
+                <Input
+                  id="wg-private-key"
+                  type={showToken ? 'text' : 'password'}
+                  value={(config.privateKey as string) || ''}
+                  onChange={(e) =>
+                    handleConfigChange(activeInstance.id, 'privateKey', e.target.value)
+                  }
+                  placeholder="Generate with: wg genkey"
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleShowToken(activeInstance.id)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="wg-address" required description="IP address for this WireGuard interface">
+                Interface Address
+              </Label>
+              <Input
+                id="wg-address"
+                value={(config.address as string) || ''}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'address', e.target.value)
+                }
+                placeholder="10.0.0.1/24"
+              />
+            </FormField>
+
+            <HelpText>
+              This configures the WireGuard server on this machine. Clients will connect to this endpoint.
+            </HelpText>
+          </>
+        )
+
       case 'zerotier':
         return (
           <>
             <FormField>
-              <Label htmlFor="network-id" required description="Network ID to join">
+              <Label htmlFor="zt-network-id" required description="ZeroTier network ID to join">
                 Network ID
               </Label>
               <Input
-                id="network-id"
+                id="zt-network-id"
                 value={(config.networkId as string) || ''}
                 onChange={(e) =>
                   handleConfigChange(activeInstance.id, 'networkId', e.target.value)
                 }
-                placeholder="Enter network ID..."
+                placeholder="e.g., 8056c2e21c000001"
               />
+              <HelpText>
+                Get your network ID from the{' '}
+                <a
+                  href="https://my.zerotier.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  ZeroTier Central
+                </a>
+                . This machine will join the network and be accessible to other members.
+              </HelpText>
             </FormField>
           </>
         )
 
       case 'vscode-tunnel':
-      case 'ssh-forward':
-      case 'reverse-ssh':
-      case 'bastion':
         return (
           <>
             <FormField>
-              <Label htmlFor="ssh-host" required description="SSH host to connect to">
-                Host
+              <Label htmlFor="vsc-name" description="Name for this tunnel (shown in VS Code)">
+                Machine Name
               </Label>
               <Input
-                id="ssh-host"
-                value={(config.host as string) || ''}
+                id="vsc-name"
+                value={(config.machineName as string) || ''}
                 onChange={(e) =>
-                  handleConfigChange(activeInstance.id, 'host', e.target.value)
+                  handleConfigChange(activeInstance.id, 'machineName', e.target.value)
                 }
-                placeholder="hostname or IP address"
+                placeholder="my-dev-machine"
               />
+              <HelpText>
+                This name will appear when connecting via vscode.dev or VS Code Remote.
+              </HelpText>
             </FormField>
 
             <FormField>
-              <Label htmlFor="ssh-port" description="SSH port (default: 22)">
-                Port
+              <Label htmlFor="vsc-provider" description="Authentication provider">
+                Auth Provider
+              </Label>
+              <select
+                id="vsc-provider"
+                value={(config.authProvider as string) || 'github'}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'authProvider', e.target.value)
+                }
+                className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="github">GitHub</option>
+                <option value="microsoft">Microsoft</option>
+              </select>
+            </FormField>
+
+            <div className="rounded-md bg-muted p-4">
+              <p className="text-sm text-muted-foreground">
+                VS Code Tunnels makes this machine accessible via vscode.dev. Authentication is handled
+                interactively when the tunnel starts.
+              </p>
+            </div>
+          </>
+        )
+
+      case 'ssh-forward':
+        return (
+          <>
+            <FormField>
+              <Label htmlFor="ssh-listen-port" description="SSH server port on this machine">
+                SSH Listen Port
               </Label>
               <Input
-                id="ssh-port"
+                id="ssh-listen-port"
                 type="number"
-                value={(config.port as number) || 22}
+                value={(config.listenPort as number) || 22}
                 onChange={(e) =>
-                  handleConfigChange(activeInstance.id, 'port', parseInt(e.target.value) || 22)
+                  handleConfigChange(activeInstance.id, 'listenPort', parseInt(e.target.value) || 22)
                 }
                 placeholder="22"
               />
             </FormField>
 
             <FormField>
-              <Label htmlFor="ssh-user" description="SSH username">
-                Username
+              <Label htmlFor="ssh-expose-ports" description="Local ports to allow forwarding to">
+                Allowed Forward Ports
               </Label>
               <Input
-                id="ssh-user"
-                value={(config.username as string) || ''}
+                id="ssh-expose-ports"
+                value={(config.allowedPorts as string) || ''}
                 onChange={(e) =>
-                  handleConfigChange(activeInstance.id, 'username', e.target.value)
+                  handleConfigChange(activeInstance.id, 'allowedPorts', e.target.value)
                 }
-                placeholder="root"
+                placeholder="8080, 3000, 5432 (comma-separated)"
+              />
+              <HelpText>
+                Ports that SSH clients can forward to. Leave empty to allow all ports.
+              </HelpText>
+            </FormField>
+
+            <div className="rounded-md bg-muted p-4">
+              <p className="text-sm text-muted-foreground">
+                Configures SSH server to accept connections and allow port forwarding to local services.
+              </p>
+            </div>
+          </>
+        )
+
+      case 'reverse-ssh':
+        return (
+          <>
+            <FormField>
+              <Label htmlFor="rssh-relay" required description="Relay server to connect to">
+                Relay Server
+              </Label>
+              <Input
+                id="rssh-relay"
+                value={(config.relayHost as string) || ''}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'relayHost', e.target.value)
+                }
+                placeholder="relay.example.com"
+              />
+              <HelpText>
+                The SSH server that will accept your reverse tunnel and route connections back.
+              </HelpText>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="rssh-relay-port" description="SSH port on the relay server">
+                Relay Port
+              </Label>
+              <Input
+                id="rssh-relay-port"
+                type="number"
+                value={(config.relayPort as number) || 22}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'relayPort', parseInt(e.target.value) || 22)
+                }
+                placeholder="22"
               />
             </FormField>
+
+            <FormField>
+              <Label htmlFor="rssh-user" required description="Username on the relay server">
+                Relay Username
+              </Label>
+              <Input
+                id="rssh-user"
+                value={(config.relayUser as string) || ''}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'relayUser', e.target.value)
+                }
+                placeholder="tunnel-user"
+              />
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="rssh-remote-port" description="Port on relay server that routes to this machine">
+                Remote Port
+              </Label>
+              <Input
+                id="rssh-remote-port"
+                type="number"
+                value={(config.remotePort as number) || 2222}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'remotePort', parseInt(e.target.value) || 2222)
+                }
+                placeholder="2222"
+              />
+              <HelpText>
+                Clients connect to relay-server:2222 to reach this machine.
+              </HelpText>
+            </FormField>
+
+            <div className="rounded-md bg-muted p-4">
+              <p className="text-sm text-muted-foreground">
+                Creates a reverse SSH tunnel to make this machine accessible through a relay server,
+                bypassing NAT and firewalls.
+              </p>
+            </div>
+          </>
+        )
+
+      case 'bastion':
+        return (
+          <>
+            <FormField>
+              <Label htmlFor="bastion-port" description="SSH port for bastion access">
+                Listen Port
+              </Label>
+              <Input
+                id="bastion-port"
+                type="number"
+                value={(config.listenPort as number) || 22}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'listenPort', parseInt(e.target.value) || 22)
+                }
+                placeholder="22"
+              />
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="bastion-allowed-targets" description="Hosts this bastion can forward to">
+                Allowed Target Hosts
+              </Label>
+              <Input
+                id="bastion-allowed-targets"
+                value={(config.allowedTargets as string) || ''}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'allowedTargets', e.target.value)
+                }
+                placeholder="10.0.0.0/8, 192.168.1.0/24"
+              />
+              <HelpText>
+                CIDR ranges or hostnames that clients can jump to through this bastion.
+              </HelpText>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="bastion-log" description="Enable session logging">
+                Session Logging
+              </Label>
+              <select
+                id="bastion-log"
+                value={(config.sessionLogging as string) || 'enabled'}
+                onChange={(e) =>
+                  handleConfigChange(activeInstance.id, 'sessionLogging', e.target.value)
+                }
+                className="flex h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </FormField>
+
+            <div className="rounded-md bg-muted p-4">
+              <p className="text-sm text-muted-foreground">
+                Configures this machine as a bastion/jump host. Clients SSH here first, then jump to internal targets.
+              </p>
+            </div>
           </>
         )
 
