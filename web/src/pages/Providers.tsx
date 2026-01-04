@@ -353,6 +353,12 @@ export function Providers() {
     }
   }, [])
 
+  // Memoize existing instances to prevent unnecessary re-renders
+  // This is critical - without this, the modal's useEffect would reset on every render
+  const existingInstancesForModal = useMemo(() => {
+    return configProvider ? providerInstances[configProvider.id] || [] : []
+  }, [configProvider, providerInstances])
+
   const sortOptions: Array<{ value: SortOption; label: string }> = [
     { value: 'name', label: 'Name' },
     { value: 'status', label: 'Status' },
@@ -462,7 +468,7 @@ export function Providers() {
         }}
         onSave={handleSaveConfig}
         onTestConnection={handleTestConnection}
-        existingInstances={configProvider ? providerInstances[configProvider.id] : []}
+        existingInstances={existingInstancesForModal}
       />
     </div>
   )

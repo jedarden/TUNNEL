@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Modal } from '@/components/ui/Modal'
 import { FormField, Label, Input, HelpText } from '@/components/ui/Form'
 import Button from '@/components/ui/Button'
@@ -52,9 +52,13 @@ export function ProviderConfigModal({
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
 
-  // Initialize instances when modal opens
+  // Track if we've initialized for the current modal open
+  const hasInitialized = useRef(false)
+
+  // Initialize instances only when modal first opens
   useEffect(() => {
-    if (isOpen && provider) {
+    if (isOpen && provider && !hasInitialized.current) {
+      hasInitialized.current = true
       if (existingInstances.length > 0) {
         setInstances(existingInstances)
         setActiveInstanceId(existingInstances[0].id)
@@ -72,6 +76,11 @@ export function ProviderConfigModal({
       }
       setHasChanges(false)
       setTestResult(null)
+    }
+
+    // Reset initialization flag when modal closes
+    if (!isOpen) {
+      hasInitialized.current = false
     }
   }, [isOpen, provider, existingInstances])
 
