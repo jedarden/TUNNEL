@@ -42,6 +42,9 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
 
       {/* Modal */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? 'modal-title' : undefined}
         className={cn(
           'relative z-50 w-full max-w-2xl max-h-[90vh] overflow-hidden',
           'bg-card border border-border rounded-lg shadow-2xl',
@@ -52,7 +55,7 @@ export function Modal({ isOpen, onClose, title, children, footer, className }: M
         {/* Header */}
         {title && (
           <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-            <h2 className="text-xl font-semibold text-foreground">{title}</h2>
+            <h2 id="modal-title" className="text-xl font-semibold text-foreground">{title}</h2>
             <button
               onClick={onClose}
               className="p-1 rounded-md hover:bg-accent transition-colors"
