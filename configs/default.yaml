@@ -18,6 +18,15 @@ settings:
   # UI theme: default, dark, light, nord, dracula
   theme: default
 
+# Web Server Configuration
+web:
+  # Web server port (default: 8080)
+  port: 8080
+
+  # Web server host address (default: 127.0.0.1 for loopback-only access)
+  # Set to 0.0.0.0 to allow connections from other machines on your network
+  host: 127.0.0.1
+
 # Credential Store Configuration
 credentials:
   # Store type: keyring (system keyring), file (encrypted file), env (environment variables)

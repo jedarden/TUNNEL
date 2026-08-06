@@ -40,6 +40,7 @@ var (
 	verbose    bool
 	jsonOutput bool
 	webPort    int
+	webHost    string
 
 	manager       *core.DefaultConnectionManager
 	reg           *registry.Registry
@@ -90,6 +91,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output in JSON format")
 	rootCmd.PersistentFlags().IntVarP(&webPort, "port", "p", 8080, "web server port")
+	rootCmd.PersistentFlags().StringVar(&webHost, "host", "", "web server host address (default: 127.0.0.1)")
 
 	// Add all subcommands
 	rootCmd.AddCommand(startCmd)
@@ -112,6 +114,9 @@ func initCLI() {
 	}
 	if verbose {
 		viper.Set("verbose", true)
+	}
+	if webHost != "" {
+		viper.Set("web.host", webHost)
 	}
 
 	// Load application config
@@ -625,7 +630,22 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	}))
 	app.Use(middleware.RequestLogger())
 
-	// Setup API routes
+	// Initialize authentication
+	credentialStore, err := initCredentialStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize credential store: %w", err)
+	}
+
+	tokenStore := middleware.NewCredentialTokenStore(credentialStore)
+	authToken, err := tokenStore.GetOrCreateToken()
+	if err != nil {
+		return fmt.Errorf("failed to get or create auth token: %w", err)
+	}
+
+	// Print the bearer token once on startup
+	printAuthToken(authToken)
+
+	// Setup API routes with authentication
 	api.SetupRoutes(app, apiServer)
 
 	// Serve embedded frontend
@@ -654,9 +674,14 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	// Try to start server, auto-incrementing port if in use
 	actualPort := webPort
 	maxAttempts := 10
+	// Get host from config (default to 127.0.0.1 if not set)
+	host := viper.GetString("web.host")
+	if host == "" {
+		host = "127.0.0.1"
+	}
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		addr := fmt.Sprintf(":%d", actualPort)
+		addr := fmt.Sprintf("%s:%d", host, actualPort)
 
 		// Check if port is available
 		listener, err := net.Listen("tcp", addr)
@@ -674,12 +699,12 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 			p.Send(tui.ServerStatusMsg{
 				Status: tui.ServerRunning,
 				Port:   actualPort,
-				URL:    fmt.Sprintf("http://localhost:%d", actualPort),
+				URL:    fmt.Sprintf("http://%s:%d", host, actualPort),
 			})
 		}
 
 		if verbose {
-			fmt.Printf("Starting web server on http://localhost:%d\n", actualPort)
+			fmt.Printf("Starting web server on http://%s:%d\n", host, actualPort)
 		}
 
 		return app.Listen(addr)
@@ -1527,6 +1552,7 @@ type providerAdapter struct {
 		Connect() error
 		Disconnect() error
 		IsConnected() bool
+		HealthCheck() (*providers.HealthStatus, error)
 	}
 }
 
@@ -1558,7 +1584,12 @@ func (p *providerAdapter) Disconnect(conn *core.Connection) error {
 }
 
 func (p *providerAdapter) IsHealthy(conn *core.Connection) bool {
-	return p.provider.IsConnected()
+	// Use the provider's HealthCheck() method which properly checks connection state
+	status, err := p.provider.HealthCheck()
+	if err != nil {
+		return false
+	}
+	return status.Healthy
 }
 
 // Keys management functions
@@ -2116,4 +2147,44 @@ func emergencyRevoke(username, reason string, killSessions, notify, force bool) 
 	color.Cyan("Audit event logged with type: emergency_revoke")
 
 	return nil
+}
+
+// initCredentialStore initializes the credential store for storing the auth token
+func initCredentialStore() (core.CredentialStore, error) {
+	// Get config values
+	storeType := viper.GetString("credential_store.type")
+	serviceName := viper.GetString("credential_store.service_name")
+	baseDir := viper.GetString("credential_store.base_dir")
+	passphrase := viper.GetString("credential_store.passphrase")
+
+	// Set defaults
+	if storeType == "" {
+		storeType = "keyring"
+	}
+	if serviceName == "" {
+		serviceName = "tunnel"
+	}
+	if passphrase == "" {
+		// Use a default passphrase for the auth token (not critical, as it's just for the bearer token)
+		passphrase = "tunnel-auth-token-storage"
+	}
+
+	return core.NewCredentialStore(storeType, serviceName, baseDir, passphrase)
+}
+
+// printAuthToken prints the bearer token once on startup
+func printAuthToken(token string) {
+	color.Cyan("═════════════════════════════════════════════════════════════════════")
+	color.Cyan("  TUNNEL API Authentication Token")
+	color.Cyan("═════════════════════════════════════════════════════════════════════")
+	color.Yellow("  Your bearer token for API access:")
+	fmt.Println()
+	color.New(color.Bold).Println("  " + token)
+	fmt.Println()
+	color.White("  Use this token in the Authorization header:")
+	color.Cyan("  Authorization: Bearer " + token)
+	fmt.Println()
+	color.Yellow("  ⚠️  Store this token securely. It will not be shown again.")
+	color.Cyan("═════════════════════════════════════════════════════════════════════")
+	fmt.Println()
 }

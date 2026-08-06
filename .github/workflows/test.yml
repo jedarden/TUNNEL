@@ -37,6 +37,11 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Create minimal frontend dist for Go embed
+        run: |
+          mkdir -p internal/web/embed/dist
+          echo '<!DOCTYPE html><html><body><h1>CI Mode</h1><p>Frontend not embedded in CI.</p></body></html>' > internal/web/embed/dist/index.html
+
       - name: Run go vet
         run: go vet ./...
 
