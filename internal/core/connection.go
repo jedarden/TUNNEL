@@ -216,8 +216,8 @@ type Config struct {
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		RemoteHost:          "localhost",
-		RemotePort:          22,
+		RemoteHost:          "", // Empty - caller must specify the actual target
+		RemotePort:          0,  // 0 - caller must specify the actual port
 		LocalPort:           8080,
 		Timeout:             30 * time.Second,
 		RetryAttempts:       3,

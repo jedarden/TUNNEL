@@ -9,6 +9,29 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	// API group
 	api := app.Group("/api")
 
+	// Public endpoint to get the bearer token (must be before auth middleware)
+	api.Get("/auth/token", func(c *fiber.Ctx) error {
+		if server.tokenStore == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"error": "Authentication not available",
+			})
+		}
+		token, err := server.tokenStore.GetToken()
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "Failed to retrieve authentication token",
+			})
+		}
+		return c.JSON(fiber.Map{
+			"token": token,
+		})
+	})
+
+	// Apply authentication middleware to all other API routes
+	if server.authMiddleware != nil {
+		api.Use(server.authMiddleware)
+	}
+
 	// Provider routes
 	providers := api.Group("/providers")
 	providers.Get("/", server.listProviders)

@@ -133,7 +133,7 @@ func (s *Server) websocketHandler(conn *websocket.Conn) {
 				}
 
 				msg := &WebSocketMessage{
-					Type:    string(event.Type),
+					Type:    event.Type.String(),
 					Time:    event.Timestamp,
 					Payload: map[string]interface{}{
 						"conn_id": event.ConnID,

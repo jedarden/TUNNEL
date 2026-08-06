@@ -95,7 +95,7 @@ func setDefaults() {
 
 	// Web server defaults
 	viper.SetDefault("web.port", 8080)
-	viper.SetDefault("web.host", "0.0.0.0")
+	viper.SetDefault("web.host", "127.0.0.1")
 
 	// SSH defaults
 	viper.SetDefault("ssh.port", 22)

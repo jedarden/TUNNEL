@@ -10,7 +10,7 @@ func TestNewFailoverManager(t *testing.T) {
 	collector := NewMetricsCollector()
 	config := DefaultFailoverConfig()
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	if fm == nil {
 		t.Fatal("Expected non-nil failover manager")
@@ -41,7 +41,7 @@ func TestNewFailoverManagerNilConfig(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
 
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	if fm == nil {
 		t.Fatal("Expected non-nil failover manager")
@@ -59,7 +59,7 @@ func TestNewFailoverManagerNilConfig(t *testing.T) {
 func TestRegisterConnection(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn.SetState(StateConnected)
@@ -86,7 +86,7 @@ func TestRegisterConnection(t *testing.T) {
 func TestUnregisterConnection(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn2 := NewConnection("test-2", "mock", 8081, "localhost", 22)
@@ -115,7 +115,7 @@ func TestUnregisterConnection(t *testing.T) {
 func TestUnregisterPrimaryConnection(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn1.SetState(StateConnected)
@@ -150,7 +150,7 @@ func TestUnregisterPrimaryConnection(t *testing.T) {
 func TestSetPrimary(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn2 := NewConnection("test-2", "mock", 8081, "localhost", 22)
@@ -196,7 +196,7 @@ func TestSetPrimary(t *testing.T) {
 func TestSetPrimaryInvalidConnection(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	err := fm.SetPrimary("non-existent")
 	if err == nil {
@@ -207,7 +207,7 @@ func TestSetPrimaryInvalidConnection(t *testing.T) {
 func TestGetPrimary(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	fm.RegisterConnection(conn)
@@ -235,7 +235,7 @@ func TestFailoverOnPrimaryFailure(t *testing.T) {
 	config.HealthCheckInterval = 100 * time.Millisecond
 	config.FailureThreshold = 2
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn1.SetState(StateConnected)
@@ -290,7 +290,7 @@ func TestHealthCheckMonitoring(t *testing.T) {
 	config.FailureThreshold = 2
 	config.RecoveryThreshold = 3
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	conn := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn.SetState(StateConnected)
@@ -352,7 +352,7 @@ func TestStartStopFailoverMonitoring(t *testing.T) {
 	config := DefaultFailoverConfig()
 	config.HealthCheckInterval = 100 * time.Millisecond
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	// Start monitoring
 	fm.Start()
@@ -388,7 +388,7 @@ func TestStartAlreadyRunning(t *testing.T) {
 	config := DefaultFailoverConfig()
 	config.HealthCheckInterval = 100 * time.Millisecond
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	// Start monitoring
 	fm.Start()
@@ -415,7 +415,7 @@ func TestAutoRecoveryToHigherPriority(t *testing.T) {
 	config.AutoRecover = true
 	config.RecoveryThreshold = 2
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn1.SetState(StateConnected)
@@ -451,7 +451,7 @@ func TestAutoRecoveryToHigherPriority(t *testing.T) {
 func TestFindBestBackup(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn1.SetState(StateConnected)
@@ -491,7 +491,7 @@ func TestFindBestBackup(t *testing.T) {
 func TestFindBestBackupNoHealthy(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn1.SetState(StateDisconnected) // Not connected
@@ -517,7 +517,7 @@ func TestFindBestBackupNoHealthy(t *testing.T) {
 func TestGetHealthStatus(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	conn := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	fm.RegisterConnection(conn)
@@ -539,7 +539,7 @@ func TestGetHealthStatus(t *testing.T) {
 func TestGetHealthStatusNotFound(t *testing.T) {
 	publisher := NewEventPublisher(100)
 	collector := NewMetricsCollector()
-	fm := NewFailoverManager(nil, publisher, collector)
+	fm := NewFailoverManager(nil, publisher, collector, nil)
 
 	_, err := fm.GetHealthStatus("non-existent")
 	if err == nil {
@@ -554,7 +554,7 @@ func TestPerformHealthChecks(t *testing.T) {
 	config := DefaultFailoverConfig()
 	config.RecoveryThreshold = 2
 
-	fm := NewFailoverManager(config, publisher, collector)
+	fm := NewFailoverManager(config, publisher, collector, nil)
 
 	conn1 := NewConnection("test-1", "mock", 8080, "localhost", 22)
 	conn1.SetState(StateConnected)

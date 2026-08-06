@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// ProviderProvider defines the interface for getting a provider's health status
+type ProviderProvider interface {
+	// Name returns the provider name
+	Name() string
+
+	// IsHealthy checks if the provider's connection is healthy
+	IsHealthy(conn *Connection) bool
+}
+
 // FailoverConfig holds configuration for failover behavior
 type FailoverConfig struct {
 	Enabled             bool
@@ -39,6 +48,7 @@ type FailoverManager struct {
 	primaryConnID    string
 	eventPublisher   *EventPublisher
 	metricsCollector MetricsCollector
+	providers        map[string]ProviderProvider // Provider registry for health checks
 	ticker           *time.Ticker
 	running          bool
 	ctx              context.Context
@@ -57,7 +67,7 @@ type HealthStatus struct {
 }
 
 // NewFailoverManager creates a new failover manager
-func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, collector MetricsCollector) *FailoverManager {
+func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, collector MetricsCollector, providers map[string]ProviderProvider) *FailoverManager {
 	if config == nil {
 		config = DefaultFailoverConfig()
 	}
@@ -70,6 +80,7 @@ func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, colle
 		healthStatus:     make(map[string]*HealthStatus),
 		eventPublisher:   publisher,
 		metricsCollector: collector,
+		providers:        providers,
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -226,9 +237,18 @@ func (fm *FailoverManager) checkConnection(conn *Connection) {
 
 // isConnectionHealthy checks if a connection is healthy
 func (fm *FailoverManager) isConnectionHealthy(conn *Connection) bool {
-	// Check connection state
+	// Check connection state first
 	if conn.GetState() != StateConnected {
 		return false
+	}
+
+	// Use provider's health check as primary signal
+	if fm.providers != nil {
+		if provider, exists := fm.providers[conn.Method]; exists {
+			if !provider.IsHealthy(conn) {
+				return false
+			}
+		}
 	}
 
 	// Check latency if metrics collector is available
@@ -241,9 +261,6 @@ func (fm *FailoverManager) isConnectionHealthy(conn *Connection) bool {
 			}
 		}
 	}
-
-	// Additional health checks can be added here
-	// For example: checking if the process is still running, port is open, etc.
 
 	return true
 }

@@ -109,7 +109,7 @@ func (s *SSHForwardProvider) HealthCheck() (*providers.HealthStatus, error) {
 	}
 
 	return &providers.HealthStatus{
-		Healthy:   true,
+		Healthy:   connected,
 		Status:    status,
 		Message:   message,
 		LastCheck: time.Now(),

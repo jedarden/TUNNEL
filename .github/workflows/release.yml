@@ -32,6 +32,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
+      - name: Create minimal frontend dist for Go embed
+        run: |
+          mkdir -p internal/web/embed/dist
+          echo '<!DOCTYPE html><html><body><h1>CI Mode</h1><p>Frontend not embedded in CI.</p></body></html>' > internal/web/embed/dist/index.html
+
       - name: Run tests
         run: go test ./... -v
 

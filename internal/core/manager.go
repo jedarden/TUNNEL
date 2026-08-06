@@ -90,7 +90,7 @@ func NewConnectionManager(config *ManagerConfig) *DefaultConnectionManager {
 
 	var failover *FailoverManager
 	if config.EnableFailover {
-		failover = NewFailoverManager(config.FailoverConfig, publisher, collector)
+		failover = NewFailoverManager(config.FailoverConfig, publisher, collector, nil)
 	}
 
 	manager := &DefaultConnectionManager{
@@ -122,6 +122,16 @@ func (m *DefaultConnectionManager) RegisterProvider(provider ConnectionProvider)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.providers[provider.Name()] = provider
+
+	// Update failover manager's provider reference if it exists
+	if m.failoverManager != nil {
+		m.failoverManager.mu.Lock()
+		m.failoverManager.providers = make(map[string]ProviderProvider)
+		for name, p := range m.providers {
+			m.failoverManager.providers[name] = p
+		}
+		m.failoverManager.mu.Unlock()
+	}
 }
 
 // Start establishes a new connection using the specified method
