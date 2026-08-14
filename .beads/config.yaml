@@ -1,8 +1,0 @@
-issue_prefixes: [tunnel]
-default_priority: 2
-default_type: task
-claim_ttl_minutes: 30
-secret_protection:
-  allowlist:
-    - "(?i)bearer token"
-    - "(?i)bearer-token"
