@@ -1,6 +1,8 @@
 # GoReleaser configuration for TUNNEL
 # Documentation: https://goreleaser.com
 
+version: 2
+
 project_name: tunnel
 
 before:
