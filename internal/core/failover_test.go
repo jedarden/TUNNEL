@@ -3,7 +3,28 @@ package core
 import (
 	"testing"
 	"time"
+
+	providerapi "github.com/jedarden/tunnel/internal/providers"
 )
+
+type failoverHealthProvider struct {
+	health *providerapi.HealthStatus
+	calls  int
+	legacy bool
+}
+
+func (p *failoverHealthProvider) Name() string {
+	return "test"
+}
+
+func (p *failoverHealthProvider) IsHealthy(*Connection) bool {
+	return p.legacy
+}
+
+func (p *failoverHealthProvider) HealthCheck() (*providerapi.HealthStatus, error) {
+	p.calls++
+	return p.health, nil
+}
 
 func TestNewFailoverManager(t *testing.T) {
 	publisher := NewEventPublisher(100)
@@ -53,6 +74,58 @@ func TestNewFailoverManagerNilConfig(t *testing.T) {
 
 	if !fm.config.Enabled {
 		t.Error("Expected default config to have failover enabled")
+	}
+}
+
+func TestIsConnectionHealthyUsesProviderHealthCheck(t *testing.T) {
+	provider := &failoverHealthProvider{
+		health: &providerapi.HealthStatus{
+			Healthy: false,
+		},
+		legacy: true,
+	}
+	fm := NewFailoverManager(nil, NewEventPublisher(10), nil, map[string]ProviderProvider{
+		"test": provider,
+	})
+	conn := NewConnection("test-1", "test", 0, "", 0)
+	conn.SetState(StateConnected)
+
+	if fm.isConnectionHealthy(conn) {
+		t.Fatal("isConnectionHealthy() returned true for an unhealthy provider")
+	}
+	if provider.calls != 1 {
+		t.Fatalf("HealthCheck() calls = %d, want 1", provider.calls)
+	}
+
+	provider.health.Healthy = true
+	if !fm.isConnectionHealthy(conn) {
+		t.Fatal("isConnectionHealthy() returned false for a healthy provider")
+	}
+	if provider.calls != 2 {
+		t.Fatalf("HealthCheck() calls = %d, want 2", provider.calls)
+	}
+}
+
+func TestIsConnectionHealthyRejectsFailedMetricProbe(t *testing.T) {
+	provider := &failoverHealthProvider{
+		health: &providerapi.HealthStatus{Healthy: true},
+	}
+	collector := NewMetricsCollector()
+	conn := NewConnection("test-1", "test", 0, "", 0)
+	conn.SetState(StateConnected)
+	collector.RegisterConnection(conn)
+	conn.Metrics.RecordFailure(&testError{"tcp probe failed"})
+
+	fm := NewFailoverManager(nil, NewEventPublisher(10), collector, map[string]ProviderProvider{
+		"test": provider,
+	})
+	if fm.isConnectionHealthy(conn) {
+		t.Fatal("isConnectionHealthy() returned true after a failed metric probe")
+	}
+
+	conn.Metrics.ClearLastError()
+	if !fm.isConnectionHealthy(conn) {
+		t.Fatal("isConnectionHealthy() returned false after the probe error was cleared")
 	}
 }
 

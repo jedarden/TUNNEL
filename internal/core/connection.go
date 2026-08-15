@@ -72,6 +72,20 @@ func (m *ConnectionMetrics) RecordFailure(err error) {
 	m.LastError = err
 }
 
+// ClearLastError clears the error from the most recent metric probe.
+func (m *ConnectionMetrics) ClearLastError() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.LastError = nil
+}
+
+// GetLastError safely retrieves the error from the most recent metric probe.
+func (m *ConnectionMetrics) GetLastError() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.LastError
+}
+
 // GetStats returns a copy of current stats
 func (m *ConnectionMetrics) GetStats() (sent, received int64, latency time.Duration) {
 	m.mu.RLock()

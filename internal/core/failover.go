@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	providerapi "github.com/jedarden/tunnel/internal/providers"
 )
 
 // ProviderProvider defines the interface for getting a provider's health status
@@ -15,6 +17,13 @@ type ProviderProvider interface {
 
 	// IsHealthy checks if the provider's connection is healthy
 	IsHealthy(conn *Connection) bool
+}
+
+// ProviderHealthChecker is implemented by providers that can return their
+// richer health status. It is optional so existing ConnectionProvider
+// implementations remain compatible with the failover manager.
+type ProviderHealthChecker interface {
+	HealthCheck() (*providerapi.HealthStatus, error)
 }
 
 // FailoverConfig holds configuration for failover behavior
@@ -237,17 +246,27 @@ func (fm *FailoverManager) checkConnection(conn *Connection) {
 
 // isConnectionHealthy checks if a connection is healthy
 func (fm *FailoverManager) isConnectionHealthy(conn *Connection) bool {
-	// Check connection state first
+	// The connection state is a cheap first guard, but it does not prove that
+	// the provider is still carrying traffic.
 	if conn.GetState() != StateConnected {
 		return false
 	}
 
-	// Use provider's health check as primary signal
-	if fm.providers != nil {
-		if provider, exists := fm.providers[conn.Method]; exists {
-			if !provider.IsHealthy(conn) {
+	// Prefer the provider's own health check. Unlike a generic TCP probe, this
+	// check is scoped to the provider/tunnel represented by this connection.
+	fm.mu.RLock()
+	provider, exists := fm.providers[conn.Method]
+	fm.mu.RUnlock()
+	if exists {
+		if healthChecker, ok := provider.(ProviderHealthChecker); ok {
+			health, err := healthChecker.HealthCheck()
+			if err != nil || health == nil || !health.Healthy {
 				return false
 			}
+		} else if !provider.IsHealthy(conn) {
+			// Preserve support for legacy providers that have not exposed the
+			// richer HealthCheck method yet.
+			return false
 		}
 	}
 
@@ -255,6 +274,11 @@ func (fm *FailoverManager) isConnectionHealthy(conn *Connection) bool {
 	if fm.metricsCollector != nil {
 		metrics, err := fm.metricsCollector.GetConnectionMetrics(conn.ID)
 		if err == nil {
+			// Collect stores a failed dial as zero latency, so inspect the
+			// error too; zero must not turn a failed probe into success.
+			if metrics.GetLastError() != nil {
+				return false
+			}
 			latency := metrics.GetLatency()
 			if latency > fm.config.MaxLatency {
 				return false

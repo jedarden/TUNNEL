@@ -440,6 +440,21 @@ func TestConnectionMetricsRecordFailure(t *testing.T) {
 	metrics.mu.RUnlock()
 }
 
+func TestConnectionMetricsLastErrorCanBeCleared(t *testing.T) {
+	metrics := &ConnectionMetrics{}
+	err := &testError{"probe failed"}
+	metrics.RecordFailure(err)
+
+	if got := metrics.GetLastError(); got != err {
+		t.Fatalf("GetLastError() = %v, want %v", got, err)
+	}
+
+	metrics.ClearLastError()
+	if got := metrics.GetLastError(); got != nil {
+		t.Fatalf("GetLastError() after clear = %v, want nil", got)
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
@@ -447,12 +462,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("Expected non-nil config")
 	}
 
-	if config.RemoteHost != "localhost" {
-		t.Errorf("Expected RemoteHost 'localhost', got '%s'", config.RemoteHost)
+	if config.RemoteHost != "" {
+		t.Errorf("Expected RemoteHost to be empty, got '%s'", config.RemoteHost)
 	}
 
-	if config.RemotePort != 22 {
-		t.Errorf("Expected RemotePort 22, got %d", config.RemotePort)
+	if config.RemotePort != 0 {
+		t.Errorf("Expected RemotePort to be zero, got %d", config.RemotePort)
 	}
 
 	if config.LocalPort != 8080 {
