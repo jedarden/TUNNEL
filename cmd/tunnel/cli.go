@@ -1592,6 +1592,11 @@ func (p *providerAdapter) IsHealthy(conn *core.Connection) bool {
 	return status.Healthy
 }
 
+// HealthCheck exposes the provider's scoped health check to failover.
+func (p *providerAdapter) HealthCheck() (*providers.HealthStatus, error) {
+	return p.provider.HealthCheck()
+}
+
 // Keys management functions
 
 func listKeys(user string) error {

@@ -73,6 +73,8 @@ func (mc *DefaultMetricsCollector) Collect(ctx context.Context, conn *Connection
 		// If measurement fails, record the error but don't fail
 		conn.Metrics.RecordFailure(err)
 		latency = 0 // Use 0 to indicate measurement failure
+	} else {
+		conn.Metrics.ClearLastError()
 	}
 
 	// Store in history and calculate average
