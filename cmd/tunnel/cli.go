@@ -116,7 +116,7 @@ func initCLI() {
 		viper.Set("verbose", true)
 	}
 	if webHost != "" {
-		viper.Set("web.host", webHost)
+		viper.Set("web.listen_address", webHost)
 	}
 
 	// Load application config
@@ -675,7 +675,7 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	actualPort := webPort
 	maxAttempts := 10
 	// Get host from config (default to 127.0.0.1 if not set)
-	host := viper.GetString("web.host")
+	host := viper.GetString("web.listen_address")
 	if host == "" {
 		host = "127.0.0.1"
 	}
