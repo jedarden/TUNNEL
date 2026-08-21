@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useWebSocket } from './useWebSocket'
+import { authenticatedFetch } from '@/api/client'
 import type { MetricsSnapshot, TimeRange, LatencyChartData } from '@/types/monitoring'
 
 /**
@@ -34,7 +35,7 @@ export function useMetrics(options: UseMetricsOptions = {}) {
   const fetchMetrics = useCallback(async () => {
     try {
       setError(null)
-      const response = await fetch('/api/metrics')
+      const response = await authenticatedFetch('/api/metrics')
 
       if (!response.ok) {
         throw new Error(`Failed to fetch metrics: ${response.statusText}`)
@@ -54,7 +55,7 @@ export function useMetrics(options: UseMetricsOptions = {}) {
    */
   const fetchChartData = useCallback(async (range: TimeRange) => {
     try {
-      const response = await fetch(`/api/metrics/latency?range=${range}`)
+      const response = await authenticatedFetch(`/api/metrics/latency?range=${range}`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch chart data: ${response.statusText}`)

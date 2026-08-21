@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { WsMessage, WsMessageType } from '@/types'
+import { getAuthToken, WEBSOCKET_AUTH_PROTOCOL } from '@/api/client'
 
 /**
  * WebSocket connection options
@@ -19,7 +20,7 @@ interface UseWebSocketOptions {
  */
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const {
-    url = '/ws',
+    url = '/api/ws',
     reconnect = true,
     reconnectDelay = 3000,
     maxReconnectAttempts = 5,
@@ -51,7 +52,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       const host = window.location.host
       const wsUrl = url.startsWith('ws') ? url : `${protocol}//${host}${url}`
 
-      const ws = new WebSocket(wsUrl)
+      const token = getAuthToken()
+      if (!token) {
+        console.warn('WebSocket connection skipped because no API token is available')
+        return
+      }
+
+      const ws = new WebSocket(wsUrl, [WEBSOCKET_AUTH_PROTOCOL, token])
 
       ws.onopen = () => {
         console.log('WebSocket connected')

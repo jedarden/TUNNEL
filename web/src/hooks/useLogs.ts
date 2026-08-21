@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useWebSocket } from './useWebSocket'
+import { authenticatedFetch } from '@/api/client'
 import type { LogEntry, LogFilter } from '@/types/monitoring'
 
 /**
@@ -54,7 +55,7 @@ export function useLogs(options: UseLogsOptions = {}) {
         params.append('providerId', filter.providerId)
       }
 
-      const response = await fetch(`/api/logs?${params}`)
+      const response = await authenticatedFetch(`/api/logs?${params}`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch logs: ${response.statusText}`)

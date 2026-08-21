@@ -9,6 +9,7 @@ import { LogStream } from '@/components/monitor/LogStream'
 import { StatusIndicator } from '@/components/monitor/StatusIndicator'
 import type { ConnectionEvent, LogFilter, TimeRange } from '@/types/monitoring'
 import { cn } from '@/lib/utils'
+import { authenticatedFetch } from '@/api/client'
 
 /**
  * Monitor page - Real-time monitoring dashboard
@@ -46,7 +47,7 @@ export function Monitor() {
    */
   const fetchConnectionEvents = async () => {
     try {
-      const response = await fetch('/api/connections/events')
+      const response = await authenticatedFetch('/api/connections/events')
       if (!response.ok) {
         throw new Error('Failed to fetch connection events')
       }

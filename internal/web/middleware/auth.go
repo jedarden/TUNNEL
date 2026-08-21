@@ -1,98 +1,63 @@
 package middleware
 
 import (
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
+	"crypto/subtle"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-const (
-	// AuthService is the service name used for storing the bearer token in the credential store
-	AuthService = "tunnel-auth"
-	// AuthKey is the key used for storing the bearer token
-	AuthKey = "bearer-token"
-	// TokenLength is the length of the random token bytes (before base64 encoding)
-	TokenLength = 32
-)
-
-// TokenStore defines the interface for storing and retrieving the auth token
-type TokenStore interface {
-	GetToken() (string, error)
-	SetToken(token string) error
-}
+// WebSocketAuthProtocol is offered by browser WebSocket clients immediately
+// before the bearer token. Browsers cannot set an Authorization header during
+// the WebSocket handshake, so the token is carried in Sec-WebSocket-Protocol.
+const WebSocketAuthProtocol = "tunnel-auth"
 
 // BearerAuth creates a middleware that validates bearer tokens
-func BearerAuth(tokenStore TokenStore) fiber.Handler {
+func BearerAuth(expectedToken string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Allow /api/system/info without authentication
-		if c.Path() == "/api/system/info" {
-			return c.Next()
-		}
-
-		// Get Authorization header
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
+		providedToken := ""
+		if authHeader != "" {
+			providedToken = tokenFromAuthorization(authHeader)
+		} else if isWebSocketRequest(c) {
+			providedToken = tokenFromWebSocketProtocols(c.Get("Sec-WebSocket-Protocol"))
+		}
+
+		if expectedToken == "" {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"error": "API authentication is not configured",
+			})
+		}
+
+		if providedToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(expectedToken)) != 1 {
+			c.Set(fiber.HeaderWWWAuthenticate, `Bearer realm="tunnel-api"`)
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Authorization header required",
+				"error": "Valid bearer token required",
 			})
 		}
 
-		// Check if it's a bearer token
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Invalid authorization header format. Expected: Bearer <token>",
-			})
-		}
-
-		// Extract token
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-
-		// Get stored token
-		storedToken, err := tokenStore.GetToken()
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to retrieve authentication token",
-			})
-		}
-
-		// Validate token
-		if token != storedToken {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Invalid authentication token",
-			})
-		}
-
-		// Token is valid, proceed to next handler
 		return c.Next()
 	}
 }
 
-// GenerateRandomToken generates a cryptographically secure random token
-func GenerateRandomToken() (string, error) {
-	bytes := make([]byte, TokenLength)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate random token: %w", err)
+func tokenFromAuthorization(header string) string {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
 	}
-	return base64.URLEncoding.EncodeToString(bytes), nil
+	return parts[1]
 }
 
-// GetTokenFromHeader extracts the bearer token from the Authorization header
-func GetTokenFromHeader(authHeader string) (string, error) {
-	if authHeader == "" {
-		return "", fmt.Errorf("authorization header required")
-	}
+func isWebSocketRequest(c *fiber.Ctx) bool {
+	return c.Path() == "/api/ws" && strings.EqualFold(c.Get(fiber.HeaderUpgrade), "websocket")
+}
 
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return "", fmt.Errorf("invalid authorization header format. Expected: Bearer <token>")
+func tokenFromWebSocketProtocols(header string) string {
+	protocols := strings.Split(header, ",")
+	for i := 0; i+1 < len(protocols); i++ {
+		if strings.TrimSpace(protocols[i]) == WebSocketAuthProtocol {
+			return strings.TrimSpace(protocols[i+1])
+		}
 	}
-
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token == "" {
-		return "", fmt.Errorf("token cannot be empty")
-	}
-
-	return token, nil
+	return ""
 }

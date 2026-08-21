@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
+	"github.com/jedarden/tunnel/internal/web/middleware"
 	"github.com/jedarden/tunnel/pkg/tunnel"
 )
 
@@ -81,6 +82,8 @@ func (s *Server) handleWebSocket(c *fiber.Ctx) error {
 	if websocket.IsWebSocketUpgrade(c) {
 		return websocket.New(func(conn *websocket.Conn) {
 			s.websocketHandler(conn)
+		}, websocket.Config{
+			Subprotocols: []string{middleware.WebSocketAuthProtocol},
 		})(c)
 	}
 	return fiber.ErrUpgradeRequired

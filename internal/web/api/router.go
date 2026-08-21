@@ -9,28 +9,12 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	// API group
 	api := app.Group("/api")
 
-	// Public endpoint to get the bearer token (must be before auth middleware)
-	api.Get("/auth/token", func(c *fiber.Ctx) error {
-		if server.tokenStore == nil {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"error": "Authentication not available",
-			})
-		}
-		token, err := server.tokenStore.GetToken()
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to retrieve authentication token",
-			})
-		}
-		return c.JSON(fiber.Map{
-			"token": token,
-		})
-	})
+	// Keep only the minimal system information probe public. Route order is
+	// significant in Fiber: this handler is registered before the group auth.
+	api.Get("/system/info", server.getSystemInfo)
 
-	// Apply authentication middleware to all other API routes
-	if server.authMiddleware != nil {
-		api.Use(server.authMiddleware)
-	}
+	// Every other /api route, including unmatched paths, fails closed.
+	api.Use(server.authMiddleware)
 
 	// Provider routes
 	providers := api.Group("/providers")
@@ -70,6 +54,5 @@ func SetupRoutes(app *fiber.App, server *Server) {
 
 	// System routes
 	system := api.Group("/system")
-	system.Get("/info", server.getSystemInfo)
 	system.Get("/status", server.getSystemStatus)
 }

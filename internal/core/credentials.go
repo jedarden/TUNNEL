@@ -24,12 +24,50 @@ var (
 	ErrStoreUnavailable   = errors.New("credential store unavailable")
 )
 
+const (
+	controlTokenService = "tunnel-control-api"
+	controlTokenKey     = "bearer-token"
+	controlTokenBytes   = 32
+)
+
 // CredentialStore defines the interface for storing and retrieving credentials
 type CredentialStore interface {
 	Set(service, key string, value []byte) error
 	Get(service, key string) ([]byte, error)
 	Delete(service, key string) error
 	List(service string) ([]string, error)
+}
+
+// GetOrCreateControlToken returns the persistent bearer token used by the web
+// control API. A token is created only when the credential is genuinely absent;
+// credential backend failures never cause silent token rotation.
+func GetOrCreateControlToken(store CredentialStore) (token string, created bool, err error) {
+	if store == nil {
+		return "", false, fmt.Errorf("control token credential store is nil")
+	}
+
+	stored, err := store.Get(controlTokenService, controlTokenKey)
+	if err == nil {
+		if len(stored) == 0 {
+			return "", false, fmt.Errorf("stored control token: %w", ErrInvalidCredential)
+		}
+		return string(stored), false, nil
+	}
+	if !errors.Is(err, ErrCredentialNotFound) {
+		return "", false, fmt.Errorf("read control token: %w", err)
+	}
+
+	random := make([]byte, controlTokenBytes)
+	if _, err := rand.Read(random); err != nil {
+		return "", false, fmt.Errorf("generate control token: %w", err)
+	}
+
+	token = base64.RawURLEncoding.EncodeToString(random)
+	if err := store.Set(controlTokenService, controlTokenKey, []byte(token)); err != nil {
+		return "", false, fmt.Errorf("store control token: %w", err)
+	}
+
+	return token, true, nil
 }
 
 // KeyringStore implements CredentialStore using the system keyring

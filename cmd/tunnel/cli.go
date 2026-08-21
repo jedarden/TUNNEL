@@ -597,16 +597,31 @@ func launchTUI(ctx context.Context) error {
 
 // startWebServer starts the Fiber web server with the API and embedded frontend
 func startWebServer(ctx context.Context, p *tea.Program) error {
+	// Initialize authentication first (before creating the server)
+	credentialStore, err := initCredentialStore()
+	if err != nil {
+		return fmt.Errorf("failed to initialize credential store: %w", err)
+	}
+
+	authToken, _, err := core.GetOrCreateControlToken(credentialStore)
+	if err != nil {
+		return fmt.Errorf("failed to get or create auth token: %w", err)
+	}
+
+	// Print the bearer token once on startup
+	printAuthToken(authToken)
+
 	// Create tunnel manager and registry for the API
 	tunnelReg = tunnel.NewRegistry()
 	tunnelManager = tunnel.NewManager(nil) // Use default config
 
-	// Create API server
+	// Create API server with the in-memory copy of the persisted token
 	apiServer := api.NewServer(&api.ServerConfig{
-		Manager:  tunnelManager,
-		Registry: tunnelReg,
-		Logger:   log.Default(),
-		DevMode:  false,
+		Manager:   tunnelManager,
+		Registry:  tunnelReg,
+		Logger:    log.Default(),
+		DevMode:   false,
+		AuthToken: authToken,
 	})
 
 	// Create Fiber app
@@ -629,21 +644,6 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 		Level: compress.LevelBestSpeed,
 	}))
 	app.Use(middleware.RequestLogger())
-
-	// Initialize authentication
-	credentialStore, err := initCredentialStore()
-	if err != nil {
-		return fmt.Errorf("failed to initialize credential store: %w", err)
-	}
-
-	tokenStore := middleware.NewCredentialTokenStore(credentialStore)
-	authToken, err := tokenStore.GetOrCreateToken()
-	if err != nil {
-		return fmt.Errorf("failed to get or create auth token: %w", err)
-	}
-
-	// Print the bearer token once on startup
-	printAuthToken(authToken)
 
 	// Setup API routes with authentication
 	api.SetupRoutes(app, apiServer)
@@ -2156,25 +2156,28 @@ func emergencyRevoke(username, reason string, killSessions, notify, force bool) 
 
 // initCredentialStore initializes the credential store for storing the auth token
 func initCredentialStore() (core.CredentialStore, error) {
-	// Get config values
-	storeType := viper.GetString("credential_store.type")
-	serviceName := viper.GetString("credential_store.service_name")
-	baseDir := viper.GetString("credential_store.base_dir")
-	passphrase := viper.GetString("credential_store.passphrase")
+	credentialConfig := config.GetDefaultConfig().Credentials
+	if appConfig != nil {
+		credentialConfig = appConfig.Credentials
+	}
 
-	// Set defaults
-	if storeType == "" {
-		storeType = "keyring"
+	baseDir := credentialConfig.BaseDir
+	if strings.HasPrefix(baseDir, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("expand credential directory: %w", err)
+		}
+		baseDir = filepath.Join(homeDir, strings.TrimPrefix(baseDir, "~/"))
 	}
-	if serviceName == "" {
-		serviceName = "tunnel"
-	}
+
+	passphrase := credentialConfig.Passphrase
 	if passphrase == "" {
-		// Use a default passphrase for the auth token (not critical, as it's just for the bearer token)
-		passphrase = "tunnel-auth-token-storage"
+		// Match the existing non-interactive file-store fallback used for
+		// provider secrets.
+		passphrase = "tunnel-credentials"
 	}
 
-	return core.NewCredentialStore(storeType, serviceName, baseDir, passphrase)
+	return core.NewCredentialStore(credentialConfig.Store, "tunnel", baseDir, passphrase)
 }
 
 // printAuthToken prints the bearer token once on startup
@@ -2182,14 +2185,12 @@ func printAuthToken(token string) {
 	color.Cyan("═════════════════════════════════════════════════════════════════════")
 	color.Cyan("  TUNNEL API Authentication Token")
 	color.Cyan("═════════════════════════════════════════════════════════════════════")
-	color.Yellow("  Your bearer token for API access:")
+	color.Yellow("  Your bearer token for API and dashboard access:")
 	fmt.Println()
 	color.New(color.Bold).Println("  " + token)
 	fmt.Println()
-	color.White("  Use this token in the Authorization header:")
-	color.Cyan("  Authorization: Bearer " + token)
-	fmt.Println()
-	color.Yellow("  ⚠️  Store this token securely. It will not be shown again.")
+	color.White("  Paste it into the dashboard, or send it as Authorization: Bearer <token>.")
+	color.Yellow("  Store it securely; the same token is reused on future starts.")
 	color.Cyan("═════════════════════════════════════════════════════════════════════")
 	fmt.Println()
 }
