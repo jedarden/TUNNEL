@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { authenticatedFetch } from '@/api/client'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUpDown } from 'lucide-react'
 import { ProviderCard } from '@/components/providers/ProviderCard'
@@ -289,7 +290,7 @@ export function Providers() {
 
     try {
       // Call the connect API
-      const response = await fetch(`/api/providers/${provider.id}/connect`, {
+      const response = await authenticatedFetch(`/api/providers/${provider.id}/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(defaultInstance.config),
@@ -325,7 +326,7 @@ export function Providers() {
 
   const handleTestConnection = async (providerId: string, config: Record<string, unknown>): Promise<boolean> => {
     try {
-      const response = await fetch(`/api/providers/${providerId}/health`, {
+      const response = await authenticatedFetch(`/api/providers/${providerId}/health`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),

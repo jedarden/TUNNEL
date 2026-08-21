@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jedarden/tunnel/internal/web/middleware"
 	"github.com/jedarden/tunnel/pkg/tunnel"
 )
 
@@ -13,23 +14,16 @@ type Server struct {
 	registry       *tunnel.Registry
 	logger         *log.Logger
 	config         *ServerConfig
-	tokenStore     TokenStore
 	authMiddleware fiber.Handler
-}
-
-// TokenStore defines the interface for storing and retrieving the auth token
-type TokenStore interface {
-	GetToken() (string, error)
-	SetToken(token string) error
 }
 
 // ServerConfig holds configuration for the API server
 type ServerConfig struct {
-	Manager    *tunnel.Manager
-	Registry   *tunnel.Registry
-	Logger     *log.Logger
-	DevMode    bool
-	TokenStore TokenStore
+	Manager   *tunnel.Manager
+	Registry  *tunnel.Registry
+	Logger    *log.Logger
+	DevMode   bool
+	AuthToken string
 }
 
 // NewServer creates a new API server instance
@@ -39,65 +33,14 @@ func NewServer(config *ServerConfig) *Server {
 	}
 
 	server := &Server{
-		manager:  config.Manager,
-		registry: config.Registry,
-		logger:   config.Logger,
-		config:   config,
-		tokenStore: config.TokenStore,
-	}
-
-	// Initialize auth middleware if token store is provided
-	if config.TokenStore != nil {
-		server.authMiddleware = createAuthMiddleware(config.TokenStore)
+		manager:        config.Manager,
+		registry:       config.Registry,
+		logger:         config.Logger,
+		config:         config,
+		authMiddleware: middleware.BearerAuth(config.AuthToken),
 	}
 
 	return server
-}
-
-// createAuthMiddleware creates the authentication middleware
-func createAuthMiddleware(tokenStore TokenStore) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		// Allow /api/system/info without authentication
-		if c.Path() == "/api/system/info" {
-			return c.Next()
-		}
-
-		// Get Authorization header
-		authHeader := c.Get("Authorization")
-		if authHeader == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Authorization header required",
-			})
-		}
-
-		// Check if it's a bearer token
-		if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Invalid authorization header format. Expected: Bearer <token>",
-			})
-		}
-
-		// Extract token
-		token := authHeader[7:]
-
-		// Get stored token
-		storedToken, err := tokenStore.GetToken()
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to retrieve authentication token",
-			})
-		}
-
-		// Validate token
-		if token != storedToken {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Invalid authentication token",
-			})
-		}
-
-		// Token is valid, proceed to next handler
-		return c.Next()
-	}
 }
 
 // GetManager returns the connection manager
