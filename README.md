@@ -269,3 +269,9 @@ Checks that required binaries are present, that the SSH server config is valid, 
 ## License
 
 MIT
+
+---
+
+Part of [jedarden.com](https://jedarden.com)
+
+*This GitHub repo is a read-only mirror of git.ardenone.com/jedarden/TUNNEL — issues and PRs are welcome here either way.*
