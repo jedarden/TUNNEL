@@ -37,17 +37,21 @@ type DefaultMetricsCollector struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
+	persistence     *MetricsHistoryService     // Persistent storage for metrics
+	enablePersistence bool                     // Whether to enable persistence
 }
 
 // NewMetricsCollector creates a new metrics collector
-func NewMetricsCollector() *DefaultMetricsCollector {
+func NewMetricsCollector(persistence *MetricsHistoryService, enablePersistence bool) *DefaultMetricsCollector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DefaultMetricsCollector{
-		connections:    make(map[string]*Connection),
-		latencyHistory: make(map[string][]time.Duration),
-		historySize:    10, // Keep last 10 samples for averaging
-		ctx:            ctx,
-		cancel:         cancel,
+		connections:        make(map[string]*Connection),
+		latencyHistory:     make(map[string][]time.Duration),
+		historySize:        10, // Keep last 10 samples for averaging
+		ctx:                ctx,
+		cancel:             cancel,
+		persistence:        persistence,
+		enablePersistence:  enablePersistence,
 	}
 }
 
@@ -100,6 +104,17 @@ func (mc *DefaultMetricsCollector) Collect(ctx context.Context, conn *Connection
 		conn.Metrics.Uptime = time.Since(conn.StartedAt)
 	}
 	conn.Metrics.mu.Unlock()
+
+	// Persist metrics if enabled
+	if mc.enablePersistence && mc.persistence != nil {
+		// Determine if connection is healthy (latency measurement succeeded)
+		isHealthy := err == nil
+
+		// Persist metrics asynchronously to avoid blocking collection
+		go func(c *Connection) {
+			_ = mc.persistence.RecordMetrics(c.ID, c.Method, c.Metrics, isHealthy)
+		}(conn)
+	}
 
 	return nil
 }

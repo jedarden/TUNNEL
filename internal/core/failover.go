@@ -58,6 +58,7 @@ type FailoverManager struct {
 	eventPublisher   *EventPublisher
 	metricsCollector MetricsCollector
 	providers        map[string]ProviderProvider // Provider registry for health checks
+	persistence      *MetricsHistoryService      // Persistent storage for events
 	ticker           *time.Ticker
 	running          bool
 	ctx              context.Context
@@ -76,7 +77,7 @@ type HealthStatus struct {
 }
 
 // NewFailoverManager creates a new failover manager
-func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, collector MetricsCollector, providers map[string]ProviderProvider) *FailoverManager {
+func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, collector MetricsCollector, providers map[string]ProviderProvider, persistence *MetricsHistoryService) *FailoverManager {
 	if config == nil {
 		config = DefaultFailoverConfig()
 	}
@@ -90,6 +91,7 @@ func NewFailoverManager(config *FailoverConfig, publisher *EventPublisher, colle
 		eventPublisher:   publisher,
 		metricsCollector: collector,
 		providers:        providers,
+		persistence:      persistence,
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -356,6 +358,18 @@ func (fm *FailoverManager) triggerFailover(failedPrimaryID string) {
 			},
 			fmt.Sprintf("Failed over from %s to %s", failedPrimaryID, backup.ID))
 		fm.eventPublisher.Publish(event)
+	}
+
+	// Persist failover event
+	if fm.persistence != nil {
+		details := map[string]interface{}{
+			"old_primary":  failedPrimaryID,
+			"new_primary":  backup.ID,
+			"trigger":      "health_check_failure",
+			"timestamp":    time.Now().Unix(),
+		}
+		_ = fm.persistence.RecordFailoverEvent("failover", backup.ID, failedPrimaryID, backup.ID,
+			fmt.Sprintf("Primary connection failed, switched to %s", backup.ID), details)
 	}
 }
 

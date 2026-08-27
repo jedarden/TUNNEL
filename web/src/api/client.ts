@@ -228,6 +228,40 @@ export const metricsAPI = {
 
   connection: (id: string) =>
     fetchAPI<Connection['metrics']>(`/metrics/connections/${id}`),
+
+  // Get historical metrics for a connection
+  history: (id: string, params?: { limit?: number; since?: string }) => {
+    const query = new URLSearchParams()
+    if (params?.limit) query.set('limit', params.limit.toString())
+    if (params?.since) query.set('since', params.since)
+    const queryString = query.toString()
+    return fetchAPI<any>(`/connections/${id}/history${queryString ? `?${queryString}` : ''}`)
+  },
+
+  // Get connection stats (uptime %, failover count, MTTR)
+  stats: (id: string, params?: { since?: string }) => {
+    const query = new URLSearchParams()
+    if (params?.since) query.set('since', params.since)
+    const queryString = query.toString()
+    return fetchAPI<any>(`/connections/${id}/stats${queryString ? `?${queryString}` : ''}`)
+  },
+
+  // Get stats for all connections
+  allStats: (params?: { since?: string }) => {
+    const query = new URLSearchParams()
+    if (params?.since) query.set('since', params.since)
+    const queryString = query.toString()
+    return fetchAPI<any>(`/metrics/connections/stats${queryString ? `?${queryString}` : ''}`)
+  },
+
+  // Get failover events
+  failoverEvents: (params?: { limit?: number; since?: string }) => {
+    const query = new URLSearchParams()
+    if (params?.limit) query.set('limit', params.limit.toString())
+    if (params?.since) query.set('since', params.since)
+    const queryString = query.toString()
+    return fetchAPI<any>(`/failover/events${queryString ? `?${queryString}` : ''}`)
+  },
 }
 
 /**

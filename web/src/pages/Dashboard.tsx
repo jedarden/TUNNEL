@@ -1,128 +1,92 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Server, Users, Zap, TrendingUp } from 'lucide-react'
+import { Server, Users, Zap, TrendingUp, Activity } from 'lucide-react'
 import StatsCard from '../components/dashboard/StatsCard'
 import ConnectionCard from '../components/dashboard/ConnectionCard'
 import QuickActions from '../components/dashboard/QuickActions'
 import ActivityFeed, { ActivityEvent } from '../components/dashboard/ActivityFeed'
 import { Connection } from '../types'
-
-// Mock data - replace with actual API calls
-const mockConnections: Connection[] = [
-  {
-    id: '1',
-    providerId: 'ngrok-1',
-    providerType: 'ngrok',
-    localPort: 3000,
-    publicUrl: 'https://abc123.ngrok.io',
-    protocol: 'https',
-    status: 'connected',
-    startedAt: new Date(Date.now() - 3600000).toISOString(),
-    metrics: {
-      requestCount: 1234,
-      bytesIn: 5242880,
-      bytesOut: 10485760,
-      avgResponseTime: 85,
-      errorRate: 0.02,
-      lastRequestAt: new Date().toISOString(),
-    },
-  },
-  {
-    id: '2',
-    providerId: 'cloudflare-1',
-    providerType: 'cloudflare',
-    localPort: 8080,
-    publicUrl: 'https://tunnel.example.com',
-    protocol: 'https',
-    status: 'connected',
-    startedAt: new Date(Date.now() - 7200000).toISOString(),
-    metrics: {
-      requestCount: 5678,
-      bytesIn: 20971520,
-      bytesOut: 41943040,
-      avgResponseTime: 120,
-      errorRate: 0.01,
-      lastRequestAt: new Date().toISOString(),
-    },
-  },
-  {
-    id: '3',
-    providerId: 'localhost-1',
-    providerType: 'localhost',
-    localPort: 4000,
-    publicUrl: 'http://localhost:4000',
-    protocol: 'http',
-    status: 'disconnected',
-    startedAt: new Date(Date.now() - 86400000).toISOString(),
-  },
-]
-
-const mockActivities: ActivityEvent[] = [
-  {
-    id: '1',
-    type: 'connection',
-    title: 'Ngrok tunnel connected',
-    description: 'Successfully established tunnel on port 3000',
-    timestamp: new Date(Date.now() - 300000).toISOString(),
-    severity: 'success',
-  },
-  {
-    id: '2',
-    type: 'status_change',
-    title: 'Cloudflare tunnel reconnected',
-    description: 'Tunnel automatically recovered after network interruption',
-    timestamp: new Date(Date.now() - 600000).toISOString(),
-    severity: 'info',
-  },
-  {
-    id: '3',
-    type: 'error',
-    title: 'Connection timeout',
-    description: 'Failed to connect to localhost:4000 - service not responding',
-    timestamp: new Date(Date.now() - 900000).toISOString(),
-    severity: 'error',
-  },
-  {
-    id: '4',
-    type: 'connection',
-    title: 'Cloudflare tunnel connected',
-    description: 'Successfully established tunnel on port 8080',
-    timestamp: new Date(Date.now() - 7200000).toISOString(),
-    severity: 'success',
-  },
-]
+import { connectionsAPI, metricsAPI } from '../api/client'
 
 const Dashboard = () => {
-  const [connections, setConnections] = useState<Connection[]>(mockConnections)
-  const [activities] = useState<ActivityEvent[]>(mockActivities)
+  const [connections, setConnections] = useState<Connection[]>([])
 
-  // In production, replace with actual API calls
-  const { data: stats } = useQuery({
-    queryKey: ['dashboard-stats'],
+  // Fetch real connections from API
+  const { data: connectionsData, isLoading: connectionsLoading, error: connectionsError } = useQuery({
+    queryKey: ['connections'],
     queryFn: async () => {
-      // Simulated API call
-      return {
-        totalProviders: 3,
-        activeConnections: connections.filter((c) => c.status === 'connected').length,
-        avgLatency: Math.round(
-          connections
-            .filter((c) => c.metrics?.avgResponseTime)
-            .reduce((acc, c) => acc + (c.metrics?.avgResponseTime || 0), 0) /
-            connections.filter((c) => c.metrics?.avgResponseTime).length
-        ),
-        totalRequests: connections.reduce((acc, c) => acc + (c.metrics?.requestCount || 0), 0),
-      }
+      const data = await connectionsAPI.list()
+      setConnections(data)
+      return data
     },
     refetchInterval: 5000, // Refresh every 5 seconds
   })
 
+  // Fetch global stats from API
+  const { data: globalMetrics } = useQuery({
+    queryKey: ['global-metrics'],
+    queryFn: async () => {
+      return await metricsAPI.allStats({ since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() })
+    },
+    refetchInterval: 10000, // Refresh every 10 seconds
+  })
+
+  // Fetch failover events for activity feed
+  const { data: failoverEvents } = useQuery({
+    queryKey: ['failover-events'],
+    queryFn: async () => {
+      return await metricsAPI.failoverEvents({ limit: 20, since: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() })
+    },
+    refetchInterval: 15000, // Refresh every 15 seconds
+  })
+
+  // Calculate aggregate stats
+  const activeConnections = connections.filter((c) => c.status === 'connected').length
+  const avgLatency = connections.length > 0
+    ? Math.round(
+        connections
+          .filter((c) => c.metrics?.avgResponseTime)
+          .reduce((acc, c) => acc + (c.metrics?.avgResponseTime || 0), 0) /
+          connections.filter((c) => c.metrics?.avgResponseTime).length
+      )
+    : 0
+
+  const totalRequests = connections.reduce((acc, c) => acc + (c.metrics?.requestCount || 0), 0)
+
+  // Calculate uptime percentage from global metrics
+  const avgUptimePercentage = globalMetrics?.stats
+    ? Object.values(globalMetrics.stats).reduce((sum: number, stats: any) => sum + (stats?.uptime_percentage || 0), 0) / Object.keys(globalMetrics.stats).length
+    : 0
+
+  // Calculate total failovers from events
+  const totalFailovers = failoverEvents?.events?.length || 0
+
+  // Convert failover events to activity feed format
+  const activities: ActivityEvent[] = (failoverEvents?.events || []).map((event: any, index: number) => ({
+    id: `failover-${index}`,
+    type: event.event_type === 'failover' ? 'status_change' : 'connection',
+    title: event.event_type === 'failover' ? 'Failover Event' : 'Connection Event',
+    description: event.reason || event.details?.trigger || 'Connection state changed',
+    timestamp: event.timestamp || new Date().toISOString(),
+    severity: event.event_type === 'failover' ? 'warning' as const : 'info' as const,
+  }))
+
+  const stats = {
+    totalProviders: connections.length,
+    activeConnections,
+    avgLatency,
+    totalRequests,
+    avgUptimePercentage: Math.round(avgUptimePercentage),
+    totalFailovers,
+  }
+
   const handleConnect = (connectionId: string) => {
     console.log('Connect:', connectionId)
-    // Implement connection logic
+    // Implement connection logic via API
     setConnections((prev) =>
       prev.map((c) => (c.id === connectionId ? { ...c, status: 'connecting' as const } : c))
     )
-    // Simulate connection
+    // Simulate connection for now
     setTimeout(() => {
       setConnections((prev) =>
         prev.map((c) => (c.id === connectionId ? { ...c, status: 'connected' as const } : c))
@@ -168,6 +132,16 @@ const Dashboard = () => {
 
   const hasActiveConnections = connections.some((c) => c.status === 'connected')
 
+  if (connectionsError) {
+    return (
+      <div className="space-y-6 p-6">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+          <p className="text-red-800 dark:text-red-200">Failed to load connections. Please check your connection.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
@@ -183,14 +157,14 @@ const Dashboard = () => {
         <StatsCard
           icon={Server}
           label="Total Providers"
-          value={stats?.totalProviders || 0}
+          value={stats.totalProviders || 0}
           variant="primary"
           description="Configured"
         />
         <StatsCard
           icon={Users}
           label="Active Connections"
-          value={stats?.activeConnections || 0}
+          value={stats.activeConnections || 0}
           variant="success"
           description="Currently running"
           trend={{ value: 12, direction: 'up' }}
@@ -198,18 +172,43 @@ const Dashboard = () => {
         <StatsCard
           icon={Zap}
           label="Avg Latency"
-          value={`${stats?.avgLatency || 0}ms`}
+          value={`${stats.avgLatency || 0}ms`}
           variant="warning"
           description="Response time"
           trend={{ value: 5, direction: 'down' }}
         />
         <StatsCard
           icon={TrendingUp}
+          label="Uptime"
+          value={`${stats.avgUptimePercentage || 0}%`}
+          variant="default"
+          description="7-day average"
+          trend={{ value: 3, direction: 'up' }}
+        />
+      </div>
+
+      {/* Additional Stats Row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <StatsCard
+          icon={Activity}
           label="Total Requests"
-          value={stats?.totalRequests?.toLocaleString() || '0'}
+          value={stats.totalRequests?.toLocaleString() || '0'}
           variant="default"
           description="All time"
-          trend={{ value: 23, direction: 'up' }}
+        />
+        <StatsCard
+          icon={TrendingUp}
+          label="Failovers (7d)"
+          value={stats.totalFailovers || 0}
+          variant={stats.totalFailovers > 0 ? 'warning' : 'success'}
+          description="Automatic switches"
+        />
+        <StatsCard
+          icon={Server}
+          label="MTTR"
+          value={globalMetrics?.stats ? `${Object.values(globalMetrics.stats).reduce((sum: number, s: any) => sum + (s?.mttr_seconds || 0), 0) / Math.max(Object.keys(globalMetrics.stats).length, 1) / 60 | 0}m` : 'N/A'}
+          variant="default"
+          description="Mean Time To Recover"
         />
       </div>
 
@@ -226,19 +225,26 @@ const Dashboard = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {connections.map((connection) => (
-              <ConnectionCard
-                key={connection.id}
-                connection={connection}
-                onConnect={handleConnect}
-                onDisconnect={handleDisconnect}
-                onConfigure={handleConfigure}
-              />
-            ))}
-          </div>
+          {connectionsLoading ? (
+            <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+              <Server className="h-12 w-12 mx-auto mb-3 opacity-50 animate-pulse" />
+              <p>Loading connections...</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {connections.map((connection) => (
+                <ConnectionCard
+                  key={connection.id}
+                  connection={connection}
+                  onConnect={handleConnect}
+                  onDisconnect={handleDisconnect}
+                  onConfigure={handleConfigure}
+                />
+              ))}
+            </div>
+          )}
 
-          {connections.length === 0 && (
+          {!connectionsLoading && connections.length === 0 && (
             <div className="text-center py-12 text-gray-500 dark:text-gray-400">
               <Server className="h-12 w-12 mx-auto mb-3 opacity-50" />
               <p>No connections configured</p>

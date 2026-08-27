@@ -211,6 +211,12 @@ var statusCmd = &cobra.Command{
 	},
 }
 
+var statusVerbose bool
+
+func init() {
+	statusCmd.Flags().BoolVarP(&statusVerbose, "verbose", "v", false, "Show detailed statistics including uptime %, failover count, and MTTR")
+}
+
 // Method management commands
 
 var listCmd = &cobra.Command{
@@ -1023,10 +1029,39 @@ func showStatus() error {
 				if connInfo, err := provider.GetConnectionInfo(); err == nil && connInfo != nil {
 					info["connection_info"] = connInfo
 				}
+
+				// Add historical stats if verbose
+				if statusVerbose && manager != nil {
+					// Get connection ID from provider name (this is a simplified approach)
+					connID := fmt.Sprintf("%s-%d", provider.Name(), os.Getpid())
+					since := time.Now().Add(-7 * 24 * time.Hour) // Last 7 days
+
+					if stats, err := manager.GetConnectionStats(connID, since); err == nil && stats != nil {
+						info["historical_stats"] = map[string]interface{}{
+							"uptime_percentage": stats.UptimePercentage,
+							"failover_count":    stats.FailoverCount,
+							"mttr_seconds":      stats.MTTRSeconds,
+							"total_sessions":    stats.TotalSessions,
+							"avg_latency_ms":    stats.AvgLatencyMs,
+						}
+					}
+				}
 			}
 
 			connections = append(connections, info)
 		}
+
+		// Add failover events if verbose
+		if statusVerbose && manager != nil {
+			since := time.Now().Add(-7 * 24 * time.Hour)
+			if events, err := manager.GetFailoverEvents(50, since); err == nil {
+				return printJSON(map[string]interface{}{
+					"connections": connections,
+					"failover_events": events,
+				})
+			}
+		}
+
 		return printJSON(map[string]interface{}{"connections": connections})
 	}
 
@@ -1050,6 +1085,11 @@ func showStatus() error {
 		for _, provider := range tunnelProviders {
 			displayProviderStatus(provider)
 		}
+	}
+
+	// Display historical statistics if verbose
+	if statusVerbose && manager != nil {
+		displayHistoricalStats()
 	}
 
 	return nil
@@ -1978,6 +2018,86 @@ func colorizeStatus(status string) string {
 	default:
 		return status
 	}
+}
+
+// displayHistoricalStats shows historical statistics when verbose mode is enabled
+func displayHistoricalStats() {
+	since := time.Now().Add(-7 * 24 * time.Hour) // Last 7 days
+
+	color.Cyan("\n=== Historical Statistics (Last 7 Days) ===")
+	fmt.Println()
+
+	// Get stats for all connections
+	allStats, err := manager.GetAllConnectionsStats(since)
+	if err != nil {
+		color.Yellow("Unable to retrieve historical statistics: %v", err)
+		return
+	}
+
+	if len(allStats) == 0 {
+		color.Yellow("No historical data available")
+		return
+	}
+
+	// Display per-connection stats
+	for connID, stats := range allStats {
+		fmt.Printf("  %s:\n", color.CyanString(connID))
+		fmt.Printf("    Uptime:         %s\n", colorizePercentage(stats.UptimePercentage))
+		fmt.Printf("    Failovers:      %d\n", stats.FailoverCount)
+		fmt.Printf("    MTTR:           %s\n", formatDuration(stats.MTTRSeconds))
+		fmt.Printf("    Sessions:       %d\n", stats.TotalSessions)
+		fmt.Printf("    Avg Latency:    %.2f ms\n", stats.AvgLatencyMs)
+		fmt.Println()
+	}
+
+	// Get and display failover events
+	failoverEvents, err := manager.GetFailoverEvents(10, since)
+	if err == nil && len(failoverEvents) > 0 {
+		color.Cyan("Recent Failover Events:")
+		for _, event := range failoverEvents {
+			timestamp := event["timestamp"].(time.Time)
+			fmt.Printf("  [%s] %s: %s\n",
+				color.YellowString(timestamp.Format("2006-01-02 15:04")),
+				event["event_type"],
+				event["reason"])
+			if oldPrimary, ok := event["old_primary_id"].(string); ok && oldPrimary != "" {
+				fmt.Printf("    %s → %s\n", color.RedString(oldPrimary), color.GreenString(event["new_primary_id"].(string)))
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// colorizePercentage returns a colored string based on the percentage value
+func colorizePercentage(percentage float64) string {
+	value := fmt.Sprintf("%.2f%%", percentage)
+	switch {
+	case percentage >= 99:
+		return color.GreenString(value)
+	case percentage >= 95:
+		return color.YellowString(value)
+	default:
+		return color.RedString(value)
+	}
+}
+
+// formatDuration formats seconds into a human-readable duration
+func formatDuration(seconds float64) string {
+	if seconds == 0 {
+		return "N/A"
+	}
+
+	duration := time.Duration(seconds * float64(time.Second))
+	hours := int(duration.Hours())
+	minutes := int(duration.Minutes()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%.0fs", seconds)
 }
 
 // emergencyRevoke revokes all SSH keys for a user in an emergency situation

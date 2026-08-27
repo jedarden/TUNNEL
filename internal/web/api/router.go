@@ -36,6 +36,8 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	connections.Delete("/:id", server.deleteConnection)
 	connections.Post("/:id/restart", server.restartConnection)
 	connections.Get("/:id/metrics", server.getConnectionMetrics)
+	connections.Get("/:id/history", server.getConnectionHistory)
+	connections.Get("/:id/stats", server.getConnectionStats)
 
 	// Failover routes
 	failover := api.Group("/failover")
@@ -43,11 +45,13 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	failover.Post("/primary/:id", server.setPrimaryConnection)
 	failover.Post("/enable", server.enableAutoFailover)
 	failover.Post("/disable", server.disableAutoFailover)
+	failover.Get("/events", server.getFailoverEvents)
 
 	// Metrics routes
 	metrics := api.Group("/metrics")
 	metrics.Get("/", server.getGlobalMetrics)
 	metrics.Get("/export", server.exportMetrics)
+	metrics.Get("/connections/stats", server.getAllConnectionsStats)
 
 	// WebSocket route
 	api.Get("/ws", server.handleWebSocket)

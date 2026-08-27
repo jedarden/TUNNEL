@@ -357,6 +357,126 @@ func (s *Server) getGlobalMetrics(c *fiber.Ctx) error {
 	})
 }
 
+func (s *Server) getConnectionHistory(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Parse query parameters
+	limit := 100
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if parsedLimit, err := fmt.Sscanf(limitStr, "%d", &limit); parsedLimit != 1 || err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "Invalid limit parameter")
+		}
+	}
+
+	// Parse time range
+	var since time.Time
+	if sinceStr := c.Query("since"); sinceStr != "" {
+		// Parse ISO 8601 timestamp
+		if parsedTime, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			since = parsedTime
+		}
+	}
+	if since.IsZero() {
+		// Default to last 24 hours
+		since = time.Now().Add(-24 * time.Hour)
+	}
+
+	history, err := s.manager.GetHistoricalMetrics(id, limit, since)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("Failed to get historical metrics: %v", err))
+	}
+
+	return c.JSON(fiber.Map{
+		"connection_id": id,
+		"since":         since.Format(time.RFC3339),
+		"limit":         limit,
+		"count":         len(history),
+		"history":       history,
+	})
+}
+
+func (s *Server) getConnectionStats(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	// Parse time range
+	var since time.Time
+	if sinceStr := c.Query("since"); sinceStr != "" {
+		if parsedTime, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			since = parsedTime
+		}
+	}
+	if since.IsZero() {
+		// Default to last 7 days
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	}
+
+	stats, err := s.manager.GetConnectionStats(id, since)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("Failed to get connection stats: %v", err))
+	}
+
+	return c.JSON(stats)
+}
+
+func (s *Server) getAllConnectionsStats(c *fiber.Ctx) error {
+	// Parse time range
+	var since time.Time
+	if sinceStr := c.Query("since"); sinceStr != "" {
+		if parsedTime, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			since = parsedTime
+		}
+	}
+	if since.IsZero() {
+		// Default to last 7 days
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	}
+
+	allStats, err := s.manager.GetAllConnectionsStats(since)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("Failed to get all connections stats: %v", err))
+	}
+
+	return c.JSON(fiber.Map{
+		"since":  since.Format(time.RFC3339),
+		"stats":  allStats,
+		"count":  len(allStats),
+	})
+}
+
+func (s *Server) getFailoverEvents(c *fiber.Ctx) error {
+	// Parse query parameters
+	limit := 50
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if parsedLimit, err := fmt.Sscanf(limitStr, "%d", &limit); parsedLimit != 1 || err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "Invalid limit parameter")
+		}
+	}
+
+	// Parse time range
+	var since time.Time
+	if sinceStr := c.Query("since"); sinceStr != "" {
+		if parsedTime, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			since = parsedTime
+		}
+	}
+	if since.IsZero() {
+		// Default to last 7 days
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	}
+
+	events, err := s.manager.GetFailoverEvents(limit, since)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("Failed to get failover events: %v", err))
+	}
+
+	return c.JSON(fiber.Map{
+		"since":   since.Format(time.RFC3339),
+		"limit":   limit,
+		"count":   len(events),
+		"events":  events,
+	})
+}
+
 func (s *Server) exportMetrics(c *fiber.Ctx) error {
 	metrics := s.manager.GetMetrics()
 

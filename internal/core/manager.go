@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -44,21 +46,32 @@ type DefaultConnectionManager struct {
 
 // ManagerConfig holds configuration for the connection manager
 type ManagerConfig struct {
-	EnableMetrics   bool
-	EnableFailover  bool
-	FailoverConfig  *FailoverConfig
-	MetricsInterval time.Duration
-	EventBufferSize int
+	EnableMetrics    bool
+	EnableFailover   bool
+	FailoverConfig   *FailoverConfig
+	MetricsInterval  time.Duration
+	EventBufferSize  int
+	DataDir          string // Directory for persistent storage (e.g., ~/.config/tunnel/)
+	EnablePersistence bool  // Whether to enable metrics history persistence
 }
 
 // DefaultManagerConfig returns a manager config with sensible defaults
 func DefaultManagerConfig() *ManagerConfig {
+	// Get default data directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = os.TempDir() // Fallback to temp directory
+	}
+	dataDir := filepath.Join(homeDir, ".config", "tunnel")
+
 	return &ManagerConfig{
-		EnableMetrics:   true,
-		EnableFailover:  true,
-		FailoverConfig:  DefaultFailoverConfig(),
-		MetricsInterval: 10 * time.Second,
-		EventBufferSize: 100,
+		EnableMetrics:    true,
+		EnableFailover:   true,
+		FailoverConfig:   DefaultFailoverConfig(),
+		MetricsInterval:  10 * time.Second,
+		EventBufferSize:  100,
+		DataDir:          dataDir,
+		EnablePersistence: true, // Enable persistence by default
 	}
 }
 
@@ -86,11 +99,24 @@ func NewConnectionManager(config *ManagerConfig) *DefaultConnectionManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	publisher := NewEventPublisher(config.EventBufferSize)
-	collector := NewMetricsCollector()
+
+	// Initialize persistence service if enabled
+	var persistence *MetricsHistoryService
+	if config.EnablePersistence && config.DataDir != "" {
+		var err error
+		persistence, err = NewMetricsHistoryService(config.DataDir)
+		if err != nil {
+			// Log warning but continue without persistence
+			fmt.Printf("Warning: Failed to initialize metrics persistence: %v\n", err)
+			persistence = nil
+		}
+	}
+
+	collector := NewMetricsCollector(persistence, config.EnablePersistence && persistence != nil)
 
 	var failover *FailoverManager
 	if config.EnableFailover {
-		failover = NewFailoverManager(config.FailoverConfig, publisher, collector, nil)
+		failover = NewFailoverManager(config.FailoverConfig, publisher, collector, nil, persistence)
 	}
 
 	manager := &DefaultConnectionManager{
@@ -447,6 +473,13 @@ func (m *DefaultConnectionManager) Shutdown() error {
 		m.metricsCollector.Stop()
 	}
 
+	// Close persistence service
+	if m.config.EnablePersistence && m.metricsCollector != nil {
+		if persistence := m.metricsCollector.persistence; persistence != nil {
+			_ = persistence.Close()
+		}
+	}
+
 	// Stop all connections
 	if err := m.StopAll(); err != nil {
 		return err
@@ -472,4 +505,48 @@ func (m *DefaultConnectionManager) GetMetrics() map[string]interface{} {
 // GetEventPublisher returns the event publisher for external subscription
 func (m *DefaultConnectionManager) GetEventPublisher() *EventPublisher {
 	return m.eventPublisher
+}
+
+// GetPersistenceService returns the metrics history persistence service
+func (m *DefaultConnectionManager) GetPersistenceService() *MetricsHistoryService {
+	if m.metricsCollector != nil {
+		return m.metricsCollector.persistence
+	}
+	return nil
+}
+
+// GetConnectionStats returns aggregate statistics for a connection since a given time
+func (m *DefaultConnectionManager) GetConnectionStats(connID string, since time.Time) (*ConnectionStats, error) {
+	persistence := m.GetPersistenceService()
+	if persistence == nil {
+		return nil, fmt.Errorf("persistence not enabled")
+	}
+	return persistence.GetConnectionStats(connID, since)
+}
+
+// GetHistoricalMetrics retrieves historical metrics for a connection
+func (m *DefaultConnectionManager) GetHistoricalMetrics(connID string, limit int, since time.Time) ([]map[string]interface{}, error) {
+	persistence := m.GetPersistenceService()
+	if persistence == nil {
+		return nil, fmt.Errorf("persistence not enabled")
+	}
+	return persistence.GetConnectionMetrics(connID, limit, since)
+}
+
+// GetFailoverEvents retrieves failover events within a time range
+func (m *DefaultConnectionManager) GetFailoverEvents(limit int, since time.Time) ([]map[string]interface{}, error) {
+	persistence := m.GetPersistenceService()
+	if persistence == nil {
+		return nil, fmt.Errorf("persistence not enabled")
+	}
+	return persistence.GetFailoverEvents(limit, since)
+}
+
+// GetAllConnectionsStats gets stats for all connections since a given time
+func (m *DefaultConnectionManager) GetAllConnectionsStats(since time.Time) (map[string]*ConnectionStats, error) {
+	persistence := m.GetPersistenceService()
+	if persistence == nil {
+		return nil, fmt.Errorf("persistence not enabled")
+	}
+	return persistence.GetAllConnectionsStats(since)
 }

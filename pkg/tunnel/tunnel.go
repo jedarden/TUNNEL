@@ -68,22 +68,26 @@ const (
 
 // ManagerConfig wraps the internal manager config
 type ManagerConfig struct {
-	EnableMetrics   bool
-	EnableFailover  bool
-	FailoverConfig  *core.FailoverConfig
-	MetricsInterval time.Duration
-	EventBufferSize int
+	EnableMetrics    bool
+	EnableFailover   bool
+	FailoverConfig   *core.FailoverConfig
+	MetricsInterval  time.Duration
+	EventBufferSize  int
+	DataDir          string // Directory for persistent storage
+	EnablePersistence bool  // Whether to enable metrics history persistence
 }
 
 // DefaultManagerConfig returns a manager config with sensible defaults
 func DefaultManagerConfig() *ManagerConfig {
 	cfg := core.DefaultManagerConfig()
 	return &ManagerConfig{
-		EnableMetrics:   cfg.EnableMetrics,
-		EnableFailover:  cfg.EnableFailover,
-		FailoverConfig:  cfg.FailoverConfig,
-		MetricsInterval: cfg.MetricsInterval,
-		EventBufferSize: cfg.EventBufferSize,
+		EnableMetrics:    cfg.EnableMetrics,
+		EnableFailover:   cfg.EnableFailover,
+		FailoverConfig:   cfg.FailoverConfig,
+		MetricsInterval:  cfg.MetricsInterval,
+		EventBufferSize:  cfg.EventBufferSize,
+		DataDir:          cfg.DataDir,
+		EnablePersistence: cfg.EnablePersistence,
 	}
 }
 
@@ -99,11 +103,13 @@ func NewManager(config *ManagerConfig) *Manager {
 		internalConfig = core.DefaultManagerConfig()
 	} else {
 		internalConfig = &core.ManagerConfig{
-			EnableMetrics:   config.EnableMetrics,
-			EnableFailover:  config.EnableFailover,
-			FailoverConfig:  config.FailoverConfig,
-			MetricsInterval: config.MetricsInterval,
-			EventBufferSize: config.EventBufferSize,
+			EnableMetrics:    config.EnableMetrics,
+			EnableFailover:   config.EnableFailover,
+			FailoverConfig:   config.FailoverConfig,
+			MetricsInterval:  config.MetricsInterval,
+			EventBufferSize:  config.EventBufferSize,
+			DataDir:          config.DataDir,
+			EnablePersistence: config.EnablePersistence,
 		}
 	}
 
