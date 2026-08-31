@@ -45,12 +45,13 @@ main() {
     audit_log "Starvation watchdog starting run"
 
     # Get all open beads and filter for starvation-alert label
+    # bead list --json returns JSONL format (one JSON object per line)
     local open_alerts
-    open_alerts=$(bead list --status open --json 2>/dev/null | jq '[if type == "array" then . else [.] end | .[] | select(.labels != null and (.labels | index("starvation-alert")) != null)]' 2>/dev/null || echo '[]')
+    open_alerts=$(bead list --status open --json 2>/dev/null | jq -s '[.[] | select(.labels != null and (.labels | index("starvation-alert")) != null)]' 2>/dev/null || echo '[]')
 
     # Get all in_progress beads with starvation-alert label
     local in_progress_alerts
-    in_progress_alerts=$(bead list --status in_progress --json 2>/dev/null | jq '[if type == "array" then . else [.] end | .[] | select(.labels != null and (.labels | index("starvation-alert")) != null)]' 2>/dev/null || echo '[]')
+    in_progress_alerts=$(bead list --status in_progress --json 2>/dev/null | jq -s '[.[] | select(.labels != null and (.labels | index("starvation-alert")) != null)]' 2>/dev/null || echo '[]')
 
     # Combine both lists
     local all_alerts
