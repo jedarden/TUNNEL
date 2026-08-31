@@ -48,6 +48,8 @@ type StarvationDetector struct {
 	lastAlertTime     time.Time
 	running           bool
 	mu                sync.RWMutex
+	ctx               context.Context
+	cancel            context.CancelFunc
 
 	// Detection history
 	detectionHistory  []StarvationCondition
@@ -55,6 +57,9 @@ type StarvationDetector struct {
 
 	// Retry state with exponential backoff
 	retryState        *RetryState
+
+	// Pluck-specific retry state with exponential backoff
+	pluckRetryState   *PluckRetryState
 }
 
 // RetryState tracks retry attempts and backoff timing
@@ -67,17 +72,39 @@ type RetryState struct {
 	BackoffDurations  []time.Duration
 }
 
-// Default retry backoff sequence: 5m → 15m → 30m → 1h
+// PluckRetryState tracks Pluck-specific retry attempts with exponential backoff
+type PluckRetryState struct {
+	CurrentAttempt      int
+	ConsecutiveFailures int
+	MaxRetries          int
+	FirstFailure        time.Time
+	LastFailure         time.Time
+	LastSuccess         time.Time
+	InitialDelay        time.Duration
+	ValidationThreshold int  // Attempts after which to trigger validation (e.g., 3)
+	RemediationThreshold int  // Attempts after which to create remediation bead (e.g., 5)
+}
+
+// Default retry backoff sequence: 5m → 10m → 20m → 40m (2x exponential)
 var defaultBackoffSequence = []time.Duration{
 	5 * time.Minute,
-	15 * time.Minute,
-	30 * time.Minute,
-	60 * time.Minute,
+	10 * time.Minute,
+	20 * time.Minute,
+	40 * time.Minute,
+}
+
+// Default Pluck retry backoff: 30s → 1m → 2m → 4m → 8m (2x exponential)
+var defaultPluckBackoffSequence = []time.Duration{
+	30 * time.Second,
+	1 * time.Minute,
+	2 * time.Minute,
+	4 * time.Minute,
+	8 * time.Minute,
 }
 
 // DetectorConfig holds configuration for the starvation detector
 type DetectorConfig struct {
-	WorkspaceDir       string
+	WorkspaceDir         string
 	BinaryPath         string // Path to bead binary (default: "bead")
 	CheckInterval      time.Duration
 	AlertCooldown      time.Duration
@@ -87,7 +114,13 @@ type DetectorConfig struct {
 	EventPublisher    *EventPublisher
 	MaxHistorySize    int
 	MaxRetries        int           // Maximum retry attempts before escalation (default: 4)
-	BackoffSequence  []time.Duration // Custom backoff sequence (optional)
+	BackoffSequence   []time.Duration // Custom backoff sequence (optional)
+
+	// Pluck-specific retry configuration
+	PluckMaxRetries           int           // Maximum Pluck retry attempts (default: 5)
+	PluckInitialDelay         time.Duration // Initial delay for Pluck retries (default: 30s)
+	PluckValidationThreshold  int           // Attempts after which to trigger validation (default: 3)
+	PluckRemediationThreshold int           // Attempts after which to create remediation bead (default: 5)
 }
 
 // NewStarvationDetector creates a new starvation detector
@@ -112,6 +145,18 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 4 // Default: 4 retry attempts
 	}
+	if config.PluckMaxRetries == 0 {
+		config.PluckMaxRetries = 5 // Default: 5 Pluck retry attempts
+	}
+	if config.PluckInitialDelay == 0 {
+		config.PluckInitialDelay = 30 * time.Second // Default: 30s initial delay
+	}
+	if config.PluckValidationThreshold == 0 {
+		config.PluckValidationThreshold = 3 // Default: trigger validation after 3 failures
+	}
+	if config.PluckRemediationThreshold == 0 {
+		config.PluckRemediationThreshold = 5 // Default: create remediation bead after 5 failures
+	}
 	backoffSequence := config.BackoffSequence
 	if len(backoffSequence) == 0 {
 		backoffSequence = defaultBackoffSequence
@@ -124,6 +169,9 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 		DryRun:       config.DryRun,
 		AuditLogger:  config.AuditLogger,
 	}
+
+	// Create context for cancellation
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &StarvationDetector{
 		workspaceDir:      config.WorkspaceDir,
@@ -138,9 +186,17 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 		dryRun:            config.DryRun,
 		detectionHistory:  make([]StarvationCondition, 0, config.MaxHistorySize),
 		maxHistorySize:    config.MaxHistorySize,
+		ctx:               ctx,
+		cancel:            cancel,
 		retryState: &RetryState{
 			MaxRetries:       config.MaxRetries,
 			BackoffDurations: backoffSequence,
+		},
+		pluckRetryState: &PluckRetryState{
+			MaxRetries:           config.PluckMaxRetries,
+			InitialDelay:         config.PluckInitialDelay,
+			ValidationThreshold:  config.PluckValidationThreshold,
+			RemediationThreshold: config.PluckRemediationThreshold,
 		},
 	}
 }
@@ -152,10 +208,10 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 		Workspace: d.workspaceDir,
 	}
 
-	// Get ready candidates
-	readyBeads, err := d.listBeads("--ready")
+	// Get ready candidates using automated retry with exponential backoff
+	readyBeads, err := d.listBeadsWithRetry("--ready")
 	if err != nil {
-		return nil, fmt.Errorf("failed to list ready beads: %w", err)
+		return nil, fmt.Errorf("failed to list ready beads with retry: %w", err)
 	}
 	condition.ReadyCandidates = len(readyBeads)
 
@@ -349,6 +405,306 @@ func (d *StarvationDetector) listBeads(filters ...string) ([]Bead, error) {
 	}
 
 	return beads, nil
+}
+
+// listBeadsWithRetry executes bead list with automated retry and exponential backoff
+// This specifically handles the case where Pluck (bead list --ready) returns zero candidates
+// but open beads exist, indicating a transient query failure
+func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, error) {
+	// Check if this is a --ready query (Pluck operation)
+	isReadyQuery := false
+	for _, filter := range filters {
+		if filter == "--ready" {
+			isReadyQuery = true
+			break
+		}
+	}
+
+	if !isReadyQuery {
+		// Not a Pluck operation, use normal listBeads
+		return d.listBeads(filters...)
+	}
+
+	// This is a Pluck operation, use retry logic
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var lastErr error
+	var beads []Bead
+
+	for attempt := 0; attempt <= d.pluckRetryState.MaxRetries; attempt++ {
+		// Execute the query
+		beads, lastErr = d.listBeads(filters...)
+		if lastErr == nil && len(beads) > 0 {
+			// Success! Reset consecutive failure counter
+			d.pluckRetryState.ConsecutiveFailures = 0
+			d.pluckRetryState.LastSuccess = time.Now()
+			return beads, nil
+		}
+
+		// Query returned zero candidates or failed
+		// Verify if open beads actually exist (mismatch detection)
+		openBeads, err := d.listBeads("--status", "open")
+		if err != nil {
+			// Can't verify open beads count, treat as hard failure
+			lastErr = fmt.Errorf("failed to verify open beads count: %w", err)
+			break
+		}
+
+		if len(openBeads) == 0 {
+			// No open beads, zero candidates is expected
+			d.pluckRetryState.ConsecutiveFailures = 0
+			return beads, nil // Return empty list, not an error
+		}
+
+		// Mismatch detected: zero ready candidates but open beads exist
+		d.pluckRetryState.ConsecutiveFailures++
+		d.pluckRetryState.CurrentAttempt = attempt + 1
+		d.pluckRetryState.LastFailure = time.Now()
+
+		if attempt == 0 {
+			d.pluckRetryState.FirstFailure = time.Now()
+		}
+
+		// Log the failure
+		if d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":             "pluck_retry_attempt",
+				"attempt_number":      attempt + 1,
+				"consecutive_failures": d.pluckRetryState.ConsecutiveFailures,
+				"ready_candidates":    len(beads),
+				"open_beads":          len(openBeads),
+				"timestamp":           time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+
+		// Check escalation thresholds
+		if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.ValidationThreshold {
+			// Trigger bead state validation after 3 consecutive failures
+			go d.triggerBeadStateValidation(attempt + 1, len(openBeads))
+		}
+
+		if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.RemediationThreshold {
+			// Create remediation bead after 5 consecutive failures
+			go d.createRemediationBead(d.pluckRetryState.ConsecutiveFailures, len(openBeads))
+			// Reset counter after creating remediation bead to avoid duplicate beads
+			d.pluckRetryState.ConsecutiveFailures = 0
+			// Return error to caller
+			return nil, fmt.Errorf("Pluck failed after %d consecutive attempts despite %d open beads - remediation bead created",
+				d.pluckRetryState.RemediationThreshold, len(openBeads))
+		}
+
+		// Calculate backoff delay with 2x exponential growth
+		backoffDelay := d.calculatePluckBackoff(attempt)
+
+		// Publish retry event
+		if d.eventPublisher != nil {
+			event := map[string]interface{}{
+				"type":                "pluck_retry",
+				"attempt_number":      attempt + 1,
+				"max_retries":         d.pluckRetryState.MaxRetries,
+				"backoff_duration":    backoffDelay.String(),
+				"ready_candidates":    len(beads),
+				"open_beads":          len(openBeads),
+				"consecutive_failures": d.pluckRetryState.ConsecutiveFailures,
+				"timestamp":           time.Now().Format(time.RFC3339),
+			}
+			_ = d.eventPublisher.Publish(event)
+		}
+
+		// Wait before retry (unless this is the last attempt)
+		if attempt < d.pluckRetryState.MaxRetries {
+			select {
+			case <-time.After(backoffDelay):
+				// Continue to next attempt
+			case <-d.ctx.Done():
+				return nil, fmt.Errorf("pluck retry cancelled: %w", d.ctx.Err())
+			}
+		}
+	}
+
+	// All retries exhausted
+	if lastErr != nil {
+		return nil, fmt.Errorf("Pluck retry exhausted after %d attempts: %w", d.pluckRetryState.MaxRetries, lastErr)
+	}
+
+	// Return the last result (even if empty) after retries
+	return beads, nil
+}
+
+// calculatePluckBackoff calculates the backoff delay with 2x exponential growth
+func (d *StarvationDetector) calculatePluckBackoff(attempt int) time.Duration {
+	if attempt == 0 {
+		return d.pluckRetryState.InitialDelay
+	}
+
+	// 2x exponential growth: delay = initial_delay * (2 ^ attempt)
+	delay := d.pluckRetryState.InitialDelay * time.Duration(1<<uint(attempt))
+
+	// Cap at maximum reasonable delay (8 minutes)
+	maxDelay := 8 * time.Minute
+	if delay > maxDelay {
+		return maxDelay
+	}
+
+	return delay
+}
+
+// triggerBeadStateValidation triggers bead state validation after consecutive Pluck failures
+func (d *StarvationDetector) triggerBeadStateValidation(attempt int, openBeads int) {
+	if d.auditLogger != nil {
+		event := map[string]interface{}{
+			"action":            "bead_state_validation_triggered",
+			"trigger_reason":    "consecutive_pluck_failures",
+			"attempt_number":    attempt,
+			"open_beads":        openBeads,
+			"timestamp":         time.Now().Format(time.RFC3339),
+		}
+		_ = d.auditLogger.Log(event)
+	}
+
+	// Run bead validator
+	report, err := d.runDiagnostics(&StarvationCondition{
+		Timestamp:       time.Now(),
+		Workspace:       d.workspaceDir,
+		OpenBeads:       openBeads,
+		ReadyCandidates: 0,
+	})
+
+	if err != nil {
+		if d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":    "bead_state_validation_failed",
+				"error":     err.Error(),
+				"timestamp": time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+		return
+	}
+
+	// Publish validation results
+	if d.eventPublisher != nil {
+		event := map[string]interface{}{
+			"type":      "bead_state_validation",
+			"report":    report,
+			"triggered_by": "pluck_retry",
+			"timestamp": time.Now().Format(time.RFC3339),
+		}
+		_ = d.eventPublisher.Publish(event)
+	}
+}
+
+// createRemediationBead creates a remediation bead for the workspace after repeated Pluck failures
+func (d *StarvationDetector) createRemediationBead(failureCount int, openBeads int) error {
+	if d.dryRun {
+		if d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":        "remediation_bead_skipped",
+				"reason":        "dry_run",
+				"failure_count": failureCount,
+				"open_beads":    openBeads,
+				"timestamp":     time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+		return nil
+	}
+
+	// Create remediation bead using bead CLI
+	beadTitle := fmt.Sprintf("Pluck starvation remediation - %d consecutive failures detected", failureCount)
+	beadDescription := fmt.Sprintf(
+		`## Pluck Starvation Detected
+
+The starvation detector detected %d consecutive Pluck failures despite %d open beads existing in the workspace.
+
+### Detection Details
+- **Consecutive Failures**: %d
+- **Open Beads Affected**: %d
+- **First Failure**: %s
+- **Last Failure**: %s
+
+### Automated Actions Taken
+1. Attempted automated retry with exponential backoff (2x delay multiplier)
+2. Triggered bead state validation after %d consecutive failures
+3. This remediation bead created after %d consecutive failures (threshold reached)
+
+### Recommended Actions
+1. Review bead database for corruption: \`bead doctor\`
+2. Check checkpoint consistency: \`bead sync flush-only\`
+3. Verify dependency graph integrity
+4. Review recent bead operations for data loss
+5. Consider restoring from checkpoint if corruption is confirmed
+
+### Next Steps
+- If \`bead doctor\` reports issues, follow recommended repair steps
+- If validation shows corruption, consider: \`bead sync import-only --input .beads/checkpoint/forensic.jsonl --restore-into-empty\`
+- Monitor future Pluck operations for recurrence
+
+---
+This is an automated remediation bead created by the starvation detector after exhausting automated retry attempts.`,
+		failureCount, openBeads, failureCount, openBeads,
+		d.pluckRetryState.FirstFailure.Format(time.RFC3339),
+		d.pluckRetryState.LastFailure.Format(time.RFC3339),
+		d.pluckRetryState.ValidationThreshold,
+		d.pluckRetryState.RemediationThreshold,
+	)
+
+	args := []string{
+		"create",
+		"--title", beadTitle,
+		"--issue-type", "task",
+		"--priority", "2", // High priority
+		"--label", "remediation",
+		"--label", "starvation-detector",
+	}
+
+	cmd := exec.Command(d.binaryPath, args...)
+	cmd.Dir = d.workspaceDir
+
+	// Set description via stdin (bead create reads from stdin for multi-line descriptions)
+	descriptionInput := beadDescription
+	cmd.Stdin = strings.NewReader(descriptionInput)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":        "remediation_bead_creation_failed",
+				"error":         err.Error(),
+				"output":        string(output),
+				"failure_count": failureCount,
+				"timestamp":     time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+		return fmt.Errorf("failed to create remediation bead: %w (output: %s)", err, string(output))
+	}
+
+	// Log successful remediation bead creation
+	if d.auditLogger != nil {
+		event := map[string]interface{}{
+			"action":        "remediation_bead_created",
+			"failure_count": failureCount,
+			"open_beads":    openBeads,
+			"timestamp":     time.Now().Format(time.RFC3339),
+		}
+		_ = d.auditLogger.Log(event)
+	}
+
+	// Publish creation event
+	if d.eventPublisher != nil {
+		event := map[string]interface{}{
+			"type":          "remediation_bead_created",
+			"failure_count": failureCount,
+			"open_beads":    openBeads,
+			"timestamp":     time.Now().Format(time.RFC3339),
+		}
+		_ = d.eventPublisher.Publish(event)
+	}
+
+	return nil
 }
 
 // runDiagnostics performs full diagnostic check

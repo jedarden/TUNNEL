@@ -42,6 +42,10 @@ var (
 	detectorDaemonMode     bool
 	detectorWorkspace      string
 	detectorMaxRetries     int
+	detectorPluckMaxRetries           int
+	detectorPluckInitialDelay         time.Duration
+	detectorPluckValidationThreshold  int
+	detectorPluckRemediationThreshold int
 )
 
 func init() {
@@ -56,6 +60,12 @@ func init() {
 	starvationDetectorCmd.Flags().BoolVar(&detectorDaemonMode, "daemon", false, "Run as continuous daemon")
 	starvationDetectorCmd.Flags().StringVar(&detectorWorkspace, "workspace", "", "Path to workspace directory (default: current directory)")
 	starvationDetectorCmd.Flags().IntVar(&detectorMaxRetries, "max-retries", 4, "Maximum retry attempts with exponential backoff before escalation")
+
+	// Pluck-specific retry configuration
+	starvationDetectorCmd.Flags().IntVar(&detectorPluckMaxRetries, "pluck-max-retries", 5, "Maximum Pluck retry attempts before creating remediation bead")
+	starvationDetectorCmd.Flags().DurationVar(&detectorPluckInitialDelay, "pluck-initial-delay", 30*time.Second, "Initial delay for Pluck retries (exponential 2x backoff)")
+	starvationDetectorCmd.Flags().IntVar(&detectorPluckValidationThreshold, "pluck-validation-threshold", 3, "Consecutive Pluck failures after which to trigger bead state validation")
+	starvationDetectorCmd.Flags().IntVar(&detectorPluckRemediationThreshold, "pluck-remediation-threshold", 5, "Consecutive Pluck failures after which to create remediation bead")
 }
 
 func runStarvationDetector() error {
@@ -102,15 +112,19 @@ func runStarvationDetector() error {
 
 	// Create detector
 	config := &core.DetectorConfig{
-		WorkspaceDir:      workspaceDir,
-		BinaryPath:        "bead",
-		CheckInterval:     detectorCheckInterval,
-		AlertCooldown:     detectorAlertCooldown,
-		AutoRepairEnabled: detectorAutoRepair,
-		DryRun:           detectorDryRun,
-		AuditLogger:      auditLogger,
-		EventPublisher:   eventPublisher,
-		MaxRetries:       detectorMaxRetries,
+		WorkspaceDir:               workspaceDir,
+		BinaryPath:                 "bead",
+		CheckInterval:              detectorCheckInterval,
+		AlertCooldown:              detectorAlertCooldown,
+		AutoRepairEnabled:          detectorAutoRepair,
+		DryRun:                     detectorDryRun,
+		AuditLogger:                auditLogger,
+		EventPublisher:             eventPublisher,
+		MaxRetries:                 detectorMaxRetries,
+		PluckMaxRetries:            detectorPluckMaxRetries,
+		PluckInitialDelay:          detectorPluckInitialDelay,
+		PluckValidationThreshold:   detectorPluckValidationThreshold,
+		PluckRemediationThreshold:  detectorPluckRemediationThreshold,
 	}
 
 	detector := core.NewStarvationDetector(config)
