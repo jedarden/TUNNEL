@@ -131,8 +131,9 @@ func initCLI() {
 	// Create registry with all providers
 	reg = registry.NewRegistry()
 
-	// Create connection manager
-	manager = core.NewConnectionManager(nil)
+	// Create connection manager with config
+	managerConfig := createManagerConfig(appConfig)
+	manager = core.NewConnectionManager(managerConfig)
 
 	// Register all providers from registry with the connection manager
 	for _, provider := range reg.ListProviders() {
@@ -152,6 +153,23 @@ func initCLI() {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to initialize key manager: %v\n", err)
 		}
 	}
+}
+
+// createManagerConfig converts application config to manager config
+func createManagerConfig(appCfg *config.Config) *core.ManagerConfig {
+	managerCfg := core.DefaultManagerConfig()
+
+	// Apply monitoring config from application config
+	if appCfg != nil && appCfg.Monitoring.MetricsRetention > 0 {
+		managerCfg.MetricsRetention = appCfg.Monitoring.MetricsRetention
+	}
+
+	// Enable/disable persistence based on monitoring config
+	if appCfg != nil {
+		managerCfg.EnablePersistence = appCfg.Monitoring.Enabled
+	}
+
+	return managerCfg
 }
 
 // Connection commands
