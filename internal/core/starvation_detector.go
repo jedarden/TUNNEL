@@ -371,23 +371,24 @@ func (d *StarvationDetector) autoRepair(report *DiagnosticReport) error {
 	return nil
 }
 
-// createDiagnosticBead creates a bead for manual intervention issues
-func (d *StarvationDetector) createDiagnosticBead(report *DiagnosticReport) error {
+// createRemediationBead creates an agent-workable bead with exact remediation steps
+func (d *StarvationDetector) createRemediationBead(report *DiagnosticReport) error {
 	if len(report.ManualInterventionRequired) == 0 && report.AutoRepairsApplied == 0 {
 		// No issues requiring attention
 		return nil
 	}
 
-	// Generate bead description
-	description := d.generateDiagnosticDescription(report)
+	// Generate bead description with actionable steps
+	description := d.generateRemediationDescription(report)
 
-	// Create bead using bead CLI
+	// Create bead using bead CLI with agent-friendly labels (no 'human' blocking)
 	args := []string{
 		"create",
-		"--title", d.generateDiagnosticTitle(report),
-		"--priority", "2", // P2 for diagnostic issues
+		"--title", d.generateRemediationTitle(report),
+		"--priority", "2", // P2 for remediation issues
 		"--issue-type", "task",
-		"--label", "alert:starvation-diagnostic",
+		"--label", "alert:starvation-remediation",
+		"--label", "agent-workable",
 	}
 
 	cmd := exec.Command(d.binaryPath, args...)
@@ -398,13 +399,13 @@ func (d *StarvationDetector) createDiagnosticBead(report *DiagnosticReport) erro
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to create diagnostic bead: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to create remediation bead: %w\nOutput: %s", err, string(output))
 	}
 
 	// Log bead creation
 	if d.auditLogger != nil {
 		event := map[string]interface{}{
-			"action":     "create_diagnostic_bead",
+			"action":     "create_remediation_bead",
 			"workspace":  d.workspaceDir,
 			"timestamp":  time.Now().Format(time.RFC3339),
 		}
@@ -541,18 +542,18 @@ func (d *StarvationDetector) generateEscalationDescription(report *DiagnosticRep
 	return sb.String()
 }
 
-// generateDiagnosticTitle creates a title for the diagnostic bead
-func (d *StarvationDetector) generateDiagnosticTitle(report *DiagnosticReport) string {
+// generateRemediationTitle creates a title for the remediation bead
+func (d *StarvationDetector) generateRemediationTitle(report *DiagnosticReport) string {
 	if len(report.ManualInterventionRequired) > 0 {
-		return fmt.Sprintf("Starvation diagnostic: %d issues requiring manual intervention",
+		return fmt.Sprintf("Starvation remediation: %d issues requiring attention",
 			len(report.ManualInterventionRequired))
 	}
-	return fmt.Sprintf("Starvation diagnostic: %d auto-repairs applied",
+	return fmt.Sprintf("Starvation remediation: %d auto-repairs applied",
 		report.AutoRepairsApplied)
 }
 
-// generateDiagnosticDescription creates a detailed description for the diagnostic bead
-func (d *StarvationDetector) generateDiagnosticDescription(report *DiagnosticReport) string {
+// generateRemediationDescription creates a detailed description with exact remediation steps
+func (d *StarvationDetector) generateRemediationDescription(report *DiagnosticReport) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Starvation Condition Detected\n\n")
@@ -587,8 +588,8 @@ func (d *StarvationDetector) generateDiagnosticDescription(report *DiagnosticRep
 	sb.WriteString("\n")
 
 	if len(report.ManualInterventionRequired) > 0 {
-		sb.WriteString("## Manual Intervention Required\n\n")
-		sb.WriteString("The following issues require manual review:\n\n")
+		sb.WriteString("## Remediation Steps\n\n")
+		sb.WriteString("The following issues require specific remediation actions:\n\n")
 		for _, issue := range report.ManualInterventionRequired {
 			sb.WriteString(fmt.Sprintf("### %s\n", issue.Name))
 			sb.WriteString(fmt.Sprintf("**Description:** %s\n", issue.Description))
@@ -598,7 +599,8 @@ func (d *StarvationDetector) generateDiagnosticDescription(report *DiagnosticRep
 					sb.WriteString(fmt.Sprintf("- %s\n", i))
 				}
 			}
-			sb.WriteString("\n")
+			sb.WriteString("**Recommended action:**\n")
+			sb.WriteString(fmt.Sprintf("%s\n\n", d.getRemediationSteps(issue.Name)))
 		}
 	}
 
@@ -611,6 +613,33 @@ func (d *StarvationDetector) generateDiagnosticDescription(report *DiagnosticRep
 	}
 
 	return sb.String()
+}
+
+// getRemediationSteps provides exact remediation steps for each issue type
+func (d *StarvationDetector) getRemediationSteps(issueName string) string {
+	switch issueName {
+	case "workspace_backend":
+		return "1. Run `bead doctor` to verify workspace health\n" +
+			"2. Check .needle.yaml for `bead_cli.backend` setting\n" +
+			"3. If using bead-rs, ensure .beads/config.json exists\n" +
+			"4. If migrating from bead-forge, run: `bead init && bead sync import-only --input .beads/checkpoint/forensic.jsonl --restore-into-empty --actor <you>`"
+	case "database_consistency":
+		return "1. Verify checkpoint exists at .beads/checkpoint/current.json\n" +
+			"2. Run `bead sync flush-only` to create/update checkpoint\n" +
+			"3. If checkpoint is missing or stale, run: `bead sync import-only --input .beads/checkpoint/forensic.jsonl --restore-into-empty --actor <you>`"
+	case "bead_backend_health":
+		return "1. Verify bead binary is accessible: `bead --version`\n" +
+			"2. Check for database lock: `lsof .beads/beads.db`\n" +
+			"3. If locked, identify and terminate the locking process\n" +
+			"4. Run `bead doctor --repair` to fix any database issues"
+	case "workspace_configuration":
+		return "1. Verify .needle.yaml contains `bead_cli.backend` setting\n" +
+			"2. Ensure only one backend configuration exists (bead-rs or bead-forge, not both)\n" +
+			"3. Run `bead sync flush-only` to update stale checkpoint"
+	default:
+		return "Run `bead doctor` for full diagnostic report\n" +
+			"Review the validation output above for specific issue details"
+	}
 }
 
 // checkAndAlert runs a single check and implements retry logic with exponential backoff
@@ -1000,7 +1029,7 @@ func (d *StarvationDetector) RunScheduledDetection() (string, error) {
 	}
 
 	// Create diagnostic bead
-	if err := d.createDiagnosticBead(report); err != nil {
+	if err := d.createRemediationBead(report); err != nil {
 		return "", fmt.Errorf("failed to create diagnostic bead: %w", err)
 	}
 
