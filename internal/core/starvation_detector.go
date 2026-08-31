@@ -288,11 +288,6 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 					pattern.FilterName, pattern.ExcludedCount))
 		}
 	}
-	excludedBeads := 0
-	exclusionReasons := []string{}
-	staleAssignees := 0
-	closedWithAssignee := 0
-	circularDeps := 0
 
 	// Check each open bead for exclusion reasons
 	for _, bead := range openBeads {
