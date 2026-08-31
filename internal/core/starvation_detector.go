@@ -474,20 +474,23 @@ func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, erro
 			_ = d.auditLogger.Log(event)
 		}
 
-		// Check escalation thresholds
-		if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.ValidationThreshold {
-			// Trigger bead state validation after 3 consecutive failures
-			go d.triggerBeadStateValidation(attempt + 1, len(openBeads))
-		}
+		// Check escalation thresholds - only when open beads actually exist
+		openBeadsCount := len(openBeads)
+		if openBeadsCount > 0 {
+			if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.ValidationThreshold {
+				// Trigger bead state validation after 3 consecutive failures
+				go d.triggerBeadStateValidation(attempt + 1, openBeadsCount)
+			}
 
-		if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.RemediationThreshold {
-			// Create remediation bead after 5 consecutive failures
-			go d.createRemediationBead(d.pluckRetryState.ConsecutiveFailures, len(openBeads))
-			// Reset counter after creating remediation bead to avoid duplicate beads
-			d.pluckRetryState.ConsecutiveFailures = 0
-			// Return error to caller
-			return nil, fmt.Errorf("Pluck failed after %d consecutive attempts despite %d open beads - remediation bead created",
-				d.pluckRetryState.RemediationThreshold, len(openBeads))
+			if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.RemediationThreshold {
+				// Create remediation bead after 5 consecutive failures
+				go d.createRemediationBead(d.pluckRetryState.ConsecutiveFailures, openBeadsCount)
+				// Reset counter after creating remediation bead to avoid duplicate beads
+				d.pluckRetryState.ConsecutiveFailures = 0
+				// Return error to caller
+				return nil, fmt.Errorf("Pluck failed after %d consecutive attempts despite %d open beads - remediation bead created",
+					d.pluckRetryState.RemediationThreshold, openBeadsCount)
+			}
 		}
 
 		// Calculate backoff delay with 2x exponential growth
@@ -609,14 +612,23 @@ func (d *StarvationDetector) createRemediationBead(failureCount int, openBeads i
 
 	// Create remediation bead using bead CLI
 	beadTitle := fmt.Sprintf("Pluck starvation remediation - %d consecutive failures detected", failureCount)
+
+	// Build description with appropriate context about open beads
+	var openBeadsContext string
+	if openBeads == 0 {
+		openBeadsContext = fmt.Sprintf("%d consecutive Pluck failures occurred in an idle workspace (0 open beads).", failureCount)
+	} else {
+		openBeadsContext = fmt.Sprintf("%d consecutive Pluck failures despite %d open beads existing in the workspace.", failureCount, openBeads)
+	}
+
 	beadDescription := fmt.Sprintf(
 		`## Pluck Starvation Detected
 
-The starvation detector detected %d consecutive Pluck failures despite %d open beads existing in the workspace.
+%s
 
 ### Detection Details
 - **Consecutive Failures**: %d
-- **Open Beads Affected**: %d
+- **Open Beads**: %d
 - **First Failure**: %s
 - **Last Failure**: %s
 
@@ -639,7 +651,8 @@ The starvation detector detected %d consecutive Pluck failures despite %d open b
 
 ---
 This is an automated remediation bead created by the starvation detector after exhausting automated retry attempts.`,
-		failureCount, openBeads, failureCount, openBeads,
+		openBeadsContext,
+		failureCount, openBeads,
 		d.pluckRetryState.FirstFailure.Format(time.RFC3339),
 		d.pluckRetryState.LastFailure.Format(time.RFC3339),
 		d.pluckRetryState.ValidationThreshold,
