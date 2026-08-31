@@ -96,6 +96,10 @@ func (v *BeadValidator) ValidateAll() ([]ValidationResult, error) {
 		v.validateClosedWithAssignee,
 		v.validateCircularDependencies,
 		v.validateDatabaseConsistency,
+		v.validateStaleDependencies,
+		v.validateMissingLabels,
+		v.validateWorkspaceConfiguration,
+		v.validateBeadBackendHealth,
 	}
 
 	for _, check := range checks {
@@ -337,6 +341,215 @@ func (v *BeadValidator) validateDatabaseConsistency() ValidationResult {
 	return result
 }
 
+// validateStaleDependencies checks for beads blocked by closed beads
+func (v *BeadValidator) validateStaleDependencies() ValidationResult {
+	result := ValidationResult{
+		Name:        "stale_dependencies",
+		Description: "Check for beads blocked by closed beads",
+		Fixable:     true,
+	}
+
+	beads, err := v.listBeads("--status", "open", "--status", "in_progress")
+	if err != nil {
+		result.Passed = false
+		result.Issues = []string{fmt.Sprintf("Failed to list beads: %v", err)}
+		return result
+	}
+
+	var issues []string
+	for _, bead := range beads {
+		if len(bead.BlockedBy) == 0 {
+			continue
+		}
+
+		// Check if any blocking beads are closed
+		for _, blockerID := range bead.BlockedBy {
+			if v.isBeadClosed(blockerID) {
+				issues = append(issues, fmt.Sprintf(
+					"Bead %s (%s) is blocked by closed bead %s",
+					bead.ID, bead.Title, blockerID,
+				))
+			}
+		}
+	}
+
+	if len(issues) > 0 {
+		result.Passed = false
+		result.Issues = issues
+	} else {
+		result.Passed = true
+	}
+
+	return result
+}
+
+// validateMissingLabels checks for beads missing expected labels
+func (v *BeadValidator) validateMissingLabels() ValidationResult {
+	result := ValidationResult{
+		Name:        "missing_labels",
+		Description: "Check for beads missing required labels based on their state",
+		Fixable:     true,
+	}
+
+	beads, err := v.listBeads()
+	if err != nil {
+		result.Passed = false
+		result.Issues = []string{fmt.Sprintf("Failed to list beads: %v", err)}
+		return result
+	}
+
+	var issues []string
+	for _, bead := range beads {
+		// Check for high-priority beads without priority label
+		if bead.Priority >= 3 {
+			hasPriorityLabel := false
+			for _, label := range bead.Labels {
+				if strings.HasPrefix(label, "priority:") {
+					hasPriorityLabel = true
+					break
+				}
+			}
+			if !hasPriorityLabel {
+				issues = append(issues, fmt.Sprintf(
+					"Bead %s (%s) has priority %d but no priority: label",
+					bead.ID, bead.Title, bead.Priority,
+				))
+			}
+		}
+
+		// Check for in-progress beads without in-progress label
+		if bead.Status == BeadStateInProgress {
+			hasInProgressLabel := false
+			for _, label := range bead.Labels {
+				if label == "in-progress" || label == "wip" {
+					hasInProgressLabel = true
+					break
+				}
+			}
+			if !hasInProgressLabel {
+				issues = append(issues, fmt.Sprintf(
+					"Bead %s (%s) is in_progress but missing in-progress label",
+					bead.ID, bead.Title,
+				))
+			}
+		}
+	}
+
+	if len(issues) > 0 {
+		result.Passed = false
+		result.Issues = issues
+	} else {
+		result.Passed = true
+	}
+
+	return result
+}
+
+// validateWorkspaceConfiguration checks for common workspace misconfigurations
+func (v *BeadValidator) validateWorkspaceConfiguration() ValidationResult {
+	result := ValidationResult{
+		Name:        "workspace_configuration",
+		Description: "Check for common workspace configuration issues",
+		Fixable:     true,
+	}
+
+	var issues []string
+
+	// Check for .needle.yaml without bead_cli.backend
+	needleConfigPath := filepath.Join(v.workspaceDir, ".needle.yaml")
+	if needleData, err := os.ReadFile(needleConfigPath); err == nil {
+		if !strings.Contains(string(needleData), "bead_cli:") {
+			issues = append(issues, ".needle.yaml exists but doesn't specify bead_cli.backend")
+		}
+	}
+
+	// Check for mixed bead backends (bead-rs vs bead-forge indicators)
+	beadRsConfig := filepath.Join(v.workspaceDir, ".beads", "config.json")
+	bfConfig := filepath.Join(v.workspaceDir, ".beads", "config.yaml")
+
+	beadRsExists, _ := os.Stat(beadRsConfig)
+	bfExists, _ := os.Stat(bfConfig)
+
+	if beadRsExists != nil && bfExists != nil {
+		issues = append(issues, "No bead backend configuration found (.beads/config.json or .beads/config.yaml)")
+	}
+
+	if beadRsExists == nil && bfExists == nil {
+		issues = append(issues, "Both bead-rs and bead-forge configurations exist (ambiguous backend)")
+	}
+
+	// Check for stale checkpoint (older than 24 hours)
+	checkpointPath := filepath.Join(v.workspaceDir, ".beads", "checkpoint", "current.json")
+	if info, err := os.Stat(checkpointPath); err == nil {
+		if time.Since(info.ModTime()) > 24*time.Hour {
+			issues = append(issues, "Checkpoint is older than 24 hours - may be stale")
+		}
+	}
+
+	if len(issues) > 0 {
+		result.Passed = false
+		result.Issues = issues
+	} else {
+		result.Passed = true
+	}
+
+	return result
+}
+
+// validateBeadBackendHealth checks if bead backend service is healthy
+func (v *BeadValidator) validateBeadBackendHealth() ValidationResult {
+	result := ValidationResult{
+		Name:        "bead_backend_health",
+		Description: "Check if bead backend service is responsive",
+		Fixable:     true,
+	}
+
+	// Try to run a simple bead command
+	cmd := exec.Command(v.binaryPath, "--version")
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		result.Passed = false
+		result.Issues = []string{
+			fmt.Sprintf("Bead backend not responsive: %v", err),
+			"Output: " + string(output),
+		}
+		return result
+	}
+
+	// Check if we can list beads
+	_, err = v.listBeads("--limit", "1")
+	if err != nil {
+		result.Passed = false
+		result.Issues = []string{
+			fmt.Sprintf("Bead backend unable to list beads: %v", err),
+			"Backend may need to be restarted",
+		}
+		return result
+	}
+
+	result.Passed = true
+	return result
+}
+
+// isBeadClosed checks if a bead is closed
+func (v *BeadValidator) isBeadClosed(beadID string) bool {
+	cmd := exec.Command(v.binaryPath, "show", beadID, "--json")
+	cmd.Dir = v.workspaceDir
+
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	var bead Bead
+	if err := json.Unmarshal(output, &bead); err != nil {
+		return false
+	}
+
+	return bead.Status == BeadStateClosed
+}
+
 // listBeads lists all beads with optional filters
 func (v *BeadValidator) listBeads(filters ...string) ([]Bead, error) {
 	args := []string{"list", "--json"}
@@ -386,6 +599,22 @@ func (v *BeadValidator) FixAll(results []ValidationResult) error {
 		case "database_consistency":
 			if err := v.fixDatabaseConsistency(); err != nil {
 				return fmt.Errorf("failed to fix database consistency: %w", err)
+			}
+		case "stale_dependencies":
+			if err := v.fixStaleDependencies(); err != nil {
+				return fmt.Errorf("failed to fix stale dependencies: %w", err)
+			}
+		case "missing_labels":
+			if err := v.fixMissingLabels(); err != nil {
+				return fmt.Errorf("failed to fix missing labels: %w", err)
+			}
+		case "workspace_configuration":
+			if err := v.fixWorkspaceConfiguration(); err != nil {
+				return fmt.Errorf("failed to fix workspace configuration: %w", err)
+			}
+		case "bead_backend_health":
+			if err := v.fixBeadBackendHealth(); err != nil {
+				return fmt.Errorf("failed to fix bead backend health: %w", err)
 			}
 		}
 	}
@@ -521,6 +750,167 @@ func (v *BeadValidator) fixDatabaseConsistency() error {
 	v.logAudit("fix_database_consistency", "workspace", true, "")
 	v.fixesApplied++
 	return nil
+}
+
+// fixStaleDependencies removes dependencies on closed beads
+func (v *BeadValidator) fixStaleDependencies() error {
+	beads, err := v.listBeads("--status", "open", "--status", "in_progress")
+	if err != nil {
+		return err
+	}
+
+	for _, bead := range beads {
+		if len(bead.BlockedBy) == 0 {
+			continue
+		}
+
+		// Find closed blocking beads
+		var closedBlockers []string
+		for _, blockerID := range bead.BlockedBy {
+			if v.isBeadClosed(blockerID) {
+				closedBlockers = append(closedBlockers, blockerID)
+			}
+		}
+
+		if len(closedBlockers) == 0 {
+			continue
+		}
+
+		if v.dryRun {
+			fmt.Printf("[DRY RUN] Would unblock bead %s from closed blockers: %v\n", bead.ID, closedBlockers)
+			v.fixesApplied++
+			continue
+		}
+
+		// Use bead dep command to remove specific blockers
+		for _, blockerID := range closedBlockers {
+			if err := v.runBeadCommand("dep", bead.ID, "--remove", blockerID); err != nil {
+				v.logAudit("fix_stale_dependencies", bead.ID, false, err.Error())
+				return err
+			}
+		}
+
+		v.logAudit("fix_stale_dependencies", bead.ID, true, fmt.Sprintf("unblocked from %v", closedBlockers))
+		v.fixesApplied++
+	}
+
+	return nil
+}
+
+// fixMissingLabels adds missing labels based on bead state
+func (v *BeadValidator) fixMissingLabels() error {
+	beads, err := v.listBeads()
+	if err != nil {
+		return err
+	}
+
+	for _, bead := range beads {
+		var labelsToAdd []string
+
+		// Add priority label for high-priority beads
+		if bead.Priority >= 3 {
+			hasPriorityLabel := false
+			for _, label := range bead.Labels {
+				if strings.HasPrefix(label, "priority:") {
+					hasPriorityLabel = true
+					break
+				}
+			}
+			if !hasPriorityLabel {
+				labelsToAdd = append(labelsToAdd, fmt.Sprintf("priority:%d", bead.Priority))
+			}
+		}
+
+		// Add in-progress label for in-progress beads
+		if bead.Status == BeadStateInProgress {
+			hasInProgressLabel := false
+			for _, label := range bead.Labels {
+				if label == "in-progress" || label == "wip" {
+					hasInProgressLabel = true
+					break
+				}
+			}
+			if !hasInProgressLabel {
+				labelsToAdd = append(labelsToAdd, "in-progress")
+			}
+		}
+
+		if len(labelsToAdd) == 0 {
+			continue
+		}
+
+		if v.dryRun {
+			fmt.Printf("[DRY RUN] Would add labels to bead %s: %v\n", bead.ID, labelsToAdd)
+			v.fixesApplied++
+			continue
+		}
+
+		// Add labels using bead label command
+		for _, label := range labelsToAdd {
+			if err := v.runBeadCommand("label", bead.ID, "--add", label); err != nil {
+				v.logAudit("fix_missing_labels", bead.ID, false, err.Error())
+				return err
+			}
+		}
+
+		v.logAudit("fix_missing_labels", bead.ID, true, fmt.Sprintf("added labels: %v", labelsToAdd))
+		v.fixesApplied++
+	}
+
+	return nil
+}
+
+// fixWorkspaceConfiguration fixes common workspace configuration issues
+func (v *BeadValidator) fixWorkspaceConfiguration() error {
+	var fixesApplied int
+
+	// Flush checkpoint to create/update it
+	checkpointPath := filepath.Join(v.workspaceDir, ".beads", "checkpoint", "current.json")
+	if info, err := os.Stat(checkpointPath); err == nil {
+		if time.Since(info.ModTime()) > 24*time.Hour {
+			if v.dryRun {
+				fmt.Printf("[DRY RUN] Would flush stale checkpoint\n")
+				fixesApplied++
+			} else {
+				if err := v.runBeadCommand("sync", "flush-only"); err != nil {
+					v.logAudit("fix_workspace_configuration", "workspace", false, err.Error())
+					return err
+				}
+				v.logAudit("fix_workspace_configuration", "workspace", true, "flushed checkpoint")
+				fixesApplied++
+			}
+		}
+	}
+
+	// Note: We don't auto-fix .needle.yaml issues or mixed backend configs
+	// as those require human decisions about which backend to use
+
+	if fixesApplied > 0 {
+		v.fixesApplied += fixesApplied
+	}
+
+	return nil
+}
+
+// fixBeadBackendHealth attempts to restart bead backend if needed
+func (v *BeadValidator) fixBeadBackendHealth() error {
+	// Try a simple bead command first to see if it's just a transient issue
+	cmd := exec.Command(v.binaryPath, "--version")
+	if err := cmd.Run(); err == nil {
+		// Backend is actually fine, no fix needed
+		return nil
+	}
+
+	// If bead backend is not responding, we can't fix it programmatically
+	// This would require systemd/service management which is outside our scope
+	// Log the issue for manual intervention
+	if v.dryRun {
+		fmt.Printf("[DRY RUN] Bead backend not responding - requires manual restart\n")
+		return nil
+	}
+
+	v.logAudit("fix_bead_backend_health", "workspace", false, "backend not responding - requires manual restart")
+	return fmt.Errorf("bead backend is not responding and cannot be auto-restarted - manual intervention required")
 }
 
 // runBeadCommand executes a bead command
