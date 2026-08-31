@@ -1,0 +1,11 @@
+[Unit]
+Description=TUNNEL Bead Starvation Watchdog - %i
+Documentation=https://github.com/jedarden/tunnel
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tunnel bead-starvation-watchdog --scheduled
+WorkingDirectory=%h/TUNNEL
+StandardOutput=journal
+StandardError=journal

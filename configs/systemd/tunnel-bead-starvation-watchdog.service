@@ -1,0 +1,16 @@
+[Unit]
+Description=TUNNEL Bead Starvation Watchdog (Daemon Mode)
+Documentation=https://github.com/jedarden/tunnel
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tunnel bead-starvation-watchdog --daemon
+WorkingDirectory=%h/TUNNEL
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

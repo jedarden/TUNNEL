@@ -1,0 +1,11 @@
+[Unit]
+Description=Run TUNNEL bead starvation watchdog every 5 minutes
+Documentation=https://github.com/jedarden/tunnel
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
