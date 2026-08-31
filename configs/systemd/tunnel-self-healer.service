@@ -1,0 +1,23 @@
+[Unit]
+Description=TUNNEL Self-Healer - Proactive bead state maintenance to prevent starvation
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tunnel self-healer --daemon --auto-repair
+WorkingDirectory=/home/coding/TUNNEL
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=200%
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

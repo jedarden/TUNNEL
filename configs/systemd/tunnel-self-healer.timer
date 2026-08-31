@@ -1,0 +1,10 @@
+[Unit]
+Description=TUNNEL Self-Healer Timer - Periodic proactive maintenance checks
+
+[Timer]
+# Run every 5 minutes
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

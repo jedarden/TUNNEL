@@ -1,0 +1,17 @@
+[Unit]
+Description=TUNNEL Self-Healer - Single shot proactive maintenance for %i
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tunnel self-healer --scheduled --auto-repair
+WorkingDirectory=/home/coding/%i
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=200%
+
+[Install]
+WantedBy=default.target
