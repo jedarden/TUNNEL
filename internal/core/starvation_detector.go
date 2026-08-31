@@ -24,6 +24,8 @@ type StarvationCondition struct {
 	ClosedWithAssignee int         `json:"closed_with_assignee"`
 	CircularDeps       int         `json:"circular_deps"`
 	DBInconsistent     bool        `json:"db_inconsistent"`
+	FallbackAnalysis   *FallbackAnalysis `json:"fallback_analysis,omitempty"`
+	CorruptionDetections []CorruptionDetection `json:"corruption_detections,omitempty"`
 }
 
 // StarvationDetector monitors for bead starvation conditions
@@ -33,6 +35,7 @@ type StarvationDetector struct {
 	beadValidator     *BeadValidator
 	auditLogger       *AuditLogger
 	eventPublisher    *EventPublisher
+	fallbackExecutor  *FallbackQueryExecutor
 
 	// Configuration
 	checkInterval     time.Duration
@@ -128,6 +131,7 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 		beadValidator:     NewBeadValidator(validatorConfig),
 		auditLogger:       config.AuditLogger,
 		eventPublisher:    config.EventPublisher,
+		fallbackExecutor:  NewFallbackQueryExecutor(config.WorkspaceDir, config.BinaryPath),
 		checkInterval:     config.CheckInterval,
 		alertCooldown:     config.AlertCooldown,
 		autoRepairEnabled: config.AutoRepairEnabled,
@@ -173,7 +177,61 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 		return nil, nil
 	}
 
-	// Starvation detected! Now diagnose why
+	// Starvation detected! Run fallback queries to diagnose why
+	fallbackAnalysis, err := d.fallbackExecutor.ExecuteFallbackQueries()
+	if err != nil {
+		// Log fallback error but continue with standard diagnosis
+		if d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":    "fallback_query_failed",
+				"error":     err.Error(),
+				"timestamp": time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+	}
+
+	// Detect corruption patterns from fallback analysis
+	var corruptionDetections []CorruptionDetection
+	if fallbackAnalysis != nil {
+		corruptionDetections = d.fallbackExecutor.DetectCorruptionPatterns(fallbackAnalysis)
+	}
+
+	// Auto-heal detected corruption patterns
+	if d.autoRepairEnabled && len(corruptionDetections) > 0 {
+		for _, detection := range corruptionDetections {
+			if detection.AutoHealable {
+				if err := d.attemptAutoHeal(detection, fallbackAnalysis); err != nil {
+					// Log error but continue
+					if d.auditLogger != nil {
+						event := map[string]interface{}{
+							"action":         "auto_heal_failed",
+							"corruption_type": detection.CorruptionType,
+							"error":          err.Error(),
+							"timestamp":      time.Now().Format(time.RFC3339),
+						}
+						_ = d.auditLogger.Log(event)
+					}
+				}
+			}
+		}
+	}
+
+	// Now diagnose why with enhanced context from fallback queries
+	excludedBeads := 0
+	exclusionReasons := []string{}
+	staleAssignees := 0
+	closedWithAssignee := 0
+	circularDeps := 0
+
+	// Add fallback query insights to exclusion reasons
+	if fallbackAnalysis != nil && len(fallbackAnalysis.ExclusionPatterns) > 0 {
+		for _, pattern := range fallbackAnalysis.ExclusionPatterns {
+			exclusionReasons = append(exclusionReasons,
+				fmt.Sprintf("Fallback analysis: %s excluded %d beads",
+					pattern.FilterName, pattern.ExcludedCount))
+		}
+	}
 	excludedBeads := 0
 	exclusionReasons := []string{}
 	staleAssignees := 0
@@ -248,6 +306,8 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 	condition.StaleAssignees = staleAssignees
 	condition.ClosedWithAssignee = closedWithAssignee
 	condition.CircularDeps = circularDeps
+	condition.FallbackAnalysis = fallbackAnalysis
+	condition.CorruptionDetections = corruptionDetections
 
 	return condition, nil
 }
@@ -496,6 +556,27 @@ func (d *StarvationDetector) generateEscalationDescription(report *DiagnosticRep
 			}
 			sb.WriteString("\n")
 		}
+
+		// Add fallback analysis if available
+		if report.Condition.FallbackAnalysis != nil {
+			sb.WriteString("### Fallback Query Analysis\n\n")
+			sb.WriteString(report.Condition.FallbackAnalysis.GetExclusionSummary())
+			sb.WriteString("\n")
+		}
+
+		// Add corruption detections if available
+		if len(report.Condition.CorruptionDetections) > 0 {
+			sb.WriteString("### Detected Corruption Patterns\n\n")
+			for _, detection := range report.Condition.CorruptionDetections {
+				sb.WriteString(fmt.Sprintf("#### %s\n", detection.CorruptionType))
+				sb.WriteString(fmt.Sprintf("**Severity:** %s\n", detection.Severity))
+				sb.WriteString(fmt.Sprintf("**Description:** %s\n", detection.Description))
+				if detection.AutoHealable {
+					sb.WriteString(fmt.Sprintf("**Auto-heal method:** %s\n", detection.HealMethod))
+				}
+				sb.WriteString("\n")
+			}
+		}
 	}
 
 	sb.WriteString("### Automated Repairs Attempted\n\n")
@@ -512,6 +593,9 @@ func (d *StarvationDetector) generateEscalationDescription(report *DiagnosticRep
 		sb.WriteString("**Aggressive repairs attempted on retries 2+:**\n")
 		sb.WriteString("- Checkpoint sync\n")
 		sb.WriteString("- Cache/stale lock cleanup\n")
+		sb.WriteString("- Fallback query analysis\n")
+		sb.WriteString("- Dependency corruption healing\n")
+		sb.WriteString("- Label misapplication healing\n")
 		sb.WriteString("\n")
 	} else {
 		sb.WriteString("No auto-repairs were successfully applied.\n\n")
@@ -535,7 +619,7 @@ func (d *StarvationDetector) generateEscalationDescription(report *DiagnosticRep
 
 	sb.WriteString("### Recommended Actions\n\n")
 	sb.WriteString("This starvation condition has persisted through all automated recovery attempts. ")
-	sb.WriteString("Review the exclusion reasons and manual intervention items above to resolve the underlying issue.\n\n")
+	sb.WriteString("Review the exclusion reasons, fallback analysis, and manual intervention items above to resolve the underlying issue.\n\n")
 
 	sb.WriteString("**Do NOT delete this bead** until the root cause is resolved and starvation is confirmed cleared.\n")
 
@@ -571,6 +655,37 @@ func (d *StarvationDetector) generateRemediationDescription(report *DiagnosticRe
 				sb.WriteString(fmt.Sprintf("- %s\n", reason))
 			}
 			sb.WriteString("\n")
+		}
+
+		// Add fallback analysis if available
+		if report.Condition.FallbackAnalysis != nil {
+			sb.WriteString("## Fallback Query Analysis\n\n")
+			sb.WriteString(report.Condition.FallbackAnalysis.GetExclusionSummary())
+			sb.WriteString("\n")
+		}
+
+		// Add corruption detections if available
+		if len(report.Condition.CorruptionDetections) > 0 {
+			sb.WriteString("## Detected Corruption Patterns\n\n")
+			for _, detection := range report.Condition.CorruptionDetections {
+				sb.WriteString(fmt.Sprintf("### %s\n", detection.CorruptionType))
+				sb.WriteString(fmt.Sprintf("**Severity:** %s\n", detection.Severity))
+				sb.WriteString(fmt.Sprintf("**Filter:** %s\n", detection.FilterName))
+				sb.WriteString(fmt.Sprintf("**Description:** %s\n", detection.Description))
+				if detection.AutoHealable {
+					sb.WriteString("**Auto-healable:** Yes\n")
+					sb.WriteString(fmt.Sprintf("**Heal method:** %s\n", detection.HealMethod))
+				} else {
+					sb.WriteString("**Auto-healable:** No (requires manual intervention)\n")
+				}
+				if len(detection.BeadIDs) > 0 {
+					sb.WriteString("**Affected beads:**\n")
+					for _, beadID := range detection.BeadIDs {
+						sb.WriteString(fmt.Sprintf("- %s\n", beadID))
+					}
+				}
+				sb.WriteString("\n")
+			}
 		}
 	}
 
@@ -931,6 +1046,162 @@ func (d *StarvationDetector) clearCaches() error {
 		for _, lockFile := range lockFiles {
 			// Try to remove stale lock files
 			if info, statErr := os.Stat(lockFile); statErr == nil {
+				// Only remove if older than 10 minutes
+				if time.Since(info.ModTime()) > 10*time.Minute {
+					os.Remove(lockFile)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// attemptAutoHeal attempts to automatically heal detected corruption patterns
+func (d *StarvationDetector) attemptAutoHeal(detection CorruptionDetection, fallbackAnalysis *FallbackAnalysis) error {
+	if !d.autoRepairEnabled {
+		return fmt.Errorf("auto-repair is disabled")
+	}
+
+	if d.dryRun {
+		return nil
+	}
+
+	switch detection.HealMethod {
+	case "validate-dependencies":
+		return d.healDependencies(detection, fallbackAnalysis)
+	case "validate-labels":
+		return d.healLabels(detection, fallbackAnalysis)
+	default:
+		return fmt.Errorf("unknown heal method: %s", detection.HealMethod)
+	}
+}
+
+// healDependencies attempts to heal dependency corruption
+func (d *StarvationDetector) healDependencies(detection CorruptionDetection, fallbackAnalysis *FallbackAnalysis) error {
+	// Get beads that were excluded by dependency filters
+	for _, pattern := range fallbackAnalysis.ExclusionPatterns {
+		if pattern.FilterName == "dependency-filters" {
+			for _, beadID := range pattern.SampleIDs {
+				// Show the bead to check its dependencies
+				cmd := exec.Command(d.binaryPath, "show", beadID, "--json")
+				cmd.Dir = d.workspaceDir
+
+				output, err := cmd.Output()
+				if err != nil {
+					continue
+				}
+
+				var bead Bead
+				if err := json.Unmarshal(output, &bead); err != nil {
+					continue
+				}
+
+				// Check for invalid dependencies (blocked by closed beads)
+				for _, blockerID := range bead.BlockedBy {
+					if d.isBeadClosed(blockerID) {
+						// This bead is blocked by a closed bead - clear the dependency
+						updateArgs := []string{"update", bead.ID, "--remove-blocked-by", blockerID}
+						updateCmd := exec.Command(d.binaryPath, updateArgs...)
+						updateCmd.Dir = d.workspaceDir
+
+						if output, err := updateCmd.CombinedOutput(); err != nil {
+							if d.auditLogger != nil {
+								event := map[string]interface{}{
+									"action":         "dependency_heal_failed",
+									"bead_id":        beadID,
+									"blocked_by":     blockerID,
+									"error":          err.Error(),
+									"output":         string(output),
+									"timestamp":      time.Now().Format(time.RFC3339),
+								}
+								_ = d.auditLogger.Log(event)
+							}
+						} else {
+							if d.auditLogger != nil {
+								event := map[string]interface{}{
+									"action":         "dependency_healed",
+									"bead_id":        beadID,
+									"blocked_by":     blockerID,
+									"timestamp":      time.Now().Format(time.RFC3339),
+								}
+								_ = d.auditLogger.Log(event)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// healLabels attempts to heal label corruption
+func (d *StarvationDetector) healLabels(detection CorruptionDetection, fallbackAnalysis *FallbackAnalysis) error {
+	// Get beads that were excluded by label filters
+	for _, pattern := range fallbackAnalysis.ExclusionPatterns {
+		if pattern.FilterName == "label-filters" {
+			for _, beadID := range pattern.SampleIDs {
+				// Show the bead to check its labels
+				cmd := exec.Command(d.binaryPath, "show", beadID, "--json")
+				cmd.Dir = d.workspaceDir
+
+				output, err := cmd.Output()
+				if err != nil {
+					continue
+				}
+
+				var bead Bead
+				if err := json.Unmarshal(output, &bead); err != nil {
+					continue
+				}
+
+				// Check for problematic labels
+				problematicLabels := []string{}
+				for _, label := range bead.Labels {
+					// Check for labels that might be causing issues
+					if strings.HasPrefix(label, "human:") || strings.HasPrefix(label, "blocked:") {
+						problematicLabels = append(problematicLabels, label)
+					}
+				}
+
+				// Remove problematic labels
+				for _, label := range problematicLabels {
+					updateArgs := []string{"label", "remove", beadID, label}
+					updateCmd := exec.Command(d.binaryPath, updateArgs...)
+					updateCmd.Dir = d.workspaceDir
+
+					if output, err := updateCmd.CombinedOutput(); err != nil {
+						if d.auditLogger != nil {
+							event := map[string]interface{}{
+								"action":         "label_heal_failed",
+								"bead_id":        beadID,
+								"label":          label,
+								"error":          err.Error(),
+								"output":         string(output),
+								"timestamp":      time.Now().Format(time.RFC3339),
+							}
+							_ = d.auditLogger.Log(event)
+						}
+					} else {
+						if d.auditLogger != nil {
+							event := map[string]interface{}{
+								"action":         "label_healed",
+								"bead_id":        beadID,
+								"label":          label,
+								"timestamp":      time.Now().Format(time.RFC3339),
+							}
+							_ = d.auditLogger.Log(event)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
 				// Only remove if older than 10 minutes
 				if time.Since(info.ModTime()) > 10*time.Minute {
 					os.Remove(lockFile)
