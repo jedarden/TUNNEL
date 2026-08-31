@@ -1,0 +1,10 @@
+[Unit]
+Description=TUNNEL Starvation Detector Timer - Periodic starvation detection checks
+
+[Timer]
+# Run every 5 minutes
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=TUNNEL Starvation Detector - Single shot starvation detection for %i
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tunnel starvation-detector --scheduled --auto-repair
+WorkingDirectory=/home/coding/%i
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=200%
+
+[Install]
+WantedBy=default.target

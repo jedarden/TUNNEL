@@ -49,6 +49,27 @@ type StarvationDetector struct {
 	// Detection history
 	detectionHistory  []StarvationCondition
 	maxHistorySize    int
+
+	// Retry state with exponential backoff
+	retryState        *RetryState
+}
+
+// RetryState tracks retry attempts and backoff timing
+type RetryState struct {
+	CurrentAttempt    int
+	MaxRetries        int
+	FirstDetection    time.Time
+	LastAttempt       time.Time
+	Condition         *StarvationCondition
+	BackoffDurations  []time.Duration
+}
+
+// Default retry backoff sequence: 5m → 15m → 30m → 1h
+var defaultBackoffSequence = []time.Duration{
+	5 * time.Minute,
+	15 * time.Minute,
+	30 * time.Minute,
+	60 * time.Minute,
 }
 
 // DetectorConfig holds configuration for the starvation detector
@@ -62,6 +83,8 @@ type DetectorConfig struct {
 	AuditLogger       *AuditLogger
 	EventPublisher    *EventPublisher
 	MaxHistorySize    int
+	MaxRetries        int           // Maximum retry attempts before escalation (default: 4)
+	BackoffSequence  []time.Duration // Custom backoff sequence (optional)
 }
 
 // NewStarvationDetector creates a new starvation detector
@@ -82,6 +105,13 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 	}
 	if config.BinaryPath == "" {
 		config.BinaryPath = "bead"
+	}
+	if config.MaxRetries == 0 {
+		config.MaxRetries = 4 // Default: 4 retry attempts
+	}
+	backoffSequence := config.BackoffSequence
+	if len(backoffSequence) == 0 {
+		backoffSequence = defaultBackoffSequence
 	}
 
 	// Create bead validator
@@ -104,6 +134,10 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 		dryRun:            config.DryRun,
 		detectionHistory:  make([]StarvationCondition, 0, config.MaxHistorySize),
 		maxHistorySize:    config.MaxHistorySize,
+		retryState: &RetryState{
+			MaxRetries:       config.MaxRetries,
+			BackoffDurations: backoffSequence,
+		},
 	}
 }
 
@@ -380,6 +414,133 @@ func (d *StarvationDetector) createDiagnosticBead(report *DiagnosticReport) erro
 	return nil
 }
 
+// createEscalationBead creates a system-level escalation bead after retries are exhausted
+func (d *StarvationDetector) createEscalationBead(report *DiagnosticReport) error {
+	// Generate bead description
+	description := d.generateEscalationDescription(report)
+
+	// Create bead using bead CLI with system-level labels (not human-blocked)
+	args := []string{
+		"create",
+		"--title", d.generateEscalationTitle(report),
+		"--priority", "1", // P1 for escalation (higher priority than diagnostic)
+		"--issue-type", "task",
+		"--label", "alert:starvation-escalation",
+		"--label", "system-level",
+		"--label", "automated-escalation",
+	}
+
+	cmd := exec.Command(d.binaryPath, args...)
+	cmd.Dir = d.workspaceDir
+
+	// Set description via stdin
+	cmd.Stdin = strings.NewReader(description)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create escalation bead: %w\nOutput: %s", err, string(output))
+	}
+
+	// Log escalation
+	if d.auditLogger != nil {
+		event := map[string]interface{}{
+			"action":         "create_escalation_bead",
+			"workspace":      d.workspaceDir,
+			"attempts_made":  d.retryState.CurrentAttempt,
+			"timestamp":      time.Now().Format(time.RFC3339),
+		}
+		_ = d.auditLogger.Log(event)
+	}
+
+	return nil
+}
+
+// generateEscalationTitle creates a title for the escalation bead
+func (d *StarvationDetector) generateEscalationTitle(report *DiagnosticReport) string {
+	return fmt.Sprintf("[ESCALATION] Starvation persisted after %d automated retry attempts",
+		d.retryState.CurrentAttempt)
+}
+
+// generateEscalationDescription creates a detailed description for the escalation bead
+func (d *StarvationDetector) generateEscalationDescription(report *DiagnosticReport) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Starvation Escalation - Automated Recovery Exhausted\n\n")
+	sb.WriteString("**This bead was automatically created after exhausting automated retry attempts.**\n\n")
+
+	sb.WriteString(fmt.Sprintf("**Workspace:** %s\n", report.Workspace))
+	sb.WriteString(fmt.Sprintf("**First detection:** %s\n", d.retryState.FirstDetection.Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("**Escalation time:** %s\n", time.Now().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("**Total retry attempts:** %d\n\n", d.retryState.CurrentAttempt))
+
+	sb.WriteString("### Retry History\n\n")
+	sb.WriteString("The following automated retry attempts were made with exponential backoff:\n\n")
+
+	for i := 1; i <= d.retryState.CurrentAttempt; i++ {
+		backoff := d.getBackoffDuration(i)
+		sb.WriteString(fmt.Sprintf("**Attempt %d:** Backoff duration %s\n", i, backoff))
+	}
+	sb.WriteString("\n")
+
+	if report.Condition != nil {
+		sb.WriteString("### Current Condition\n\n")
+		sb.WriteString(fmt.Sprintf("**Open beads:** %d\n", report.Condition.OpenBeads))
+		sb.WriteString(fmt.Sprintf("**Ready candidates:** %d\n", report.Condition.ReadyCandidates))
+		sb.WriteString(fmt.Sprintf("**Excluded beads:** %d\n\n", report.Condition.ExcludedBeads))
+
+		if len(report.Condition.ExclusionReasons) > 0 {
+			sb.WriteString("**Exclusion reasons:**\n")
+			for _, reason := range report.Condition.ExclusionReasons {
+				sb.WriteString(fmt.Sprintf("- %s\n", reason))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("### Automated Repairs Attempted\n\n")
+	if report.AutoRepairsApplied > 0 {
+		sb.WriteString(fmt.Sprintf("Applied %d automatic fixes across retry attempts:\n", report.AutoRepairsApplied))
+		for _, issue := range report.FixableIssues {
+			if !issue.Passed && issue.Fixable {
+				sb.WriteString(fmt.Sprintf("- ✓ %s: %s\n", issue.Name, issue.Description))
+			}
+		}
+		sb.WriteString("\n")
+
+		// List aggressive repairs attempted
+		sb.WriteString("**Aggressive repairs attempted on retries 2+:**\n")
+		sb.WriteString("- Checkpoint sync\n")
+		sb.WriteString("- Cache/stale lock cleanup\n")
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("No auto-repairs were successfully applied.\n\n")
+	}
+
+	if len(report.ManualInterventionRequired) > 0 {
+		sb.WriteString("### Remaining Issues Requiring Attention\n\n")
+		sb.WriteString("The following issues require manual review:\n\n")
+		for _, issue := range report.ManualInterventionRequired {
+			sb.WriteString(fmt.Sprintf("#### %s\n", issue.Name))
+			sb.WriteString(fmt.Sprintf("**Description:** %s\n", issue.Description))
+			if len(issue.Issues) > 0 {
+				sb.WriteString("**Issues:**\n")
+				for _, i := range issue.Issues {
+					sb.WriteString(fmt.Sprintf("- %s\n", i))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("### Recommended Actions\n\n")
+	sb.WriteString("This starvation condition has persisted through all automated recovery attempts. ")
+	sb.WriteString("Review the exclusion reasons and manual intervention items above to resolve the underlying issue.\n\n")
+
+	sb.WriteString("**Do NOT delete this bead** until the root cause is resolved and starvation is confirmed cleared.\n")
+
+	return sb.String()
+}
+
 // generateDiagnosticTitle creates a title for the diagnostic bead
 func (d *StarvationDetector) generateDiagnosticTitle(report *DiagnosticReport) string {
 	if len(report.ManualInterventionRequired) > 0 {
@@ -452,31 +613,63 @@ func (d *StarvationDetector) generateDiagnosticDescription(report *DiagnosticRep
 	return sb.String()
 }
 
-// checkAndAlert runs a single check and alerts if starvation is detected
+// checkAndAlert runs a single check and implements retry logic with exponential backoff
 func (d *StarvationDetector) checkAndAlert() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Check if we're in cooldown
-	if time.Since(d.lastAlertTime) < d.alertCooldown {
-		return nil
-	}
+	// Update last check time
+	d.lastCheckTime = time.Now()
 
 	// Detect starvation
 	condition, err := d.detectStarvation()
 	if err != nil {
+		// Check if this is a transient failure
+		if d.isTransientFailure(err) {
+			// Don't reset retry state for transient failures
+			if d.auditLogger != nil {
+				event := map[string]interface{}{
+					"action":    "transient_failure",
+					"error":     err.Error(),
+					"timestamp": time.Now().Format(time.RFC3339),
+				}
+				_ = d.auditLogger.Log(event)
+			}
+			return nil // Will retry on next check interval
+		}
 		return fmt.Errorf("starvation detection failed: %w", err)
 	}
 
-	// Update last check time
-	d.lastCheckTime = time.Now()
-
-	// No starvation detected
+	// No starvation detected - reset retry state
 	if condition == nil {
+		d.resetRetryState()
 		return nil
 	}
 
-	// Add to history
+	// Check if we need to wait for backoff
+	if d.retryState.CurrentAttempt > 0 && !d.shouldRetryNow() {
+		// Not time to retry yet
+		return nil
+	}
+
+	// Starvation detected - handle with retry logic
+	return d.handleStarvationWithRetry(condition)
+}
+
+// handleStarvationWithRetry implements the retry logic with exponential backoff
+func (d *StarvationDetector) handleStarvationWithRetry(condition *StarvationCondition) error {
+	// First detection or new condition
+	if d.retryState.CurrentAttempt == 0 || !d.isSameCondition(condition) {
+		d.retryState.CurrentAttempt = 0
+		d.retryState.FirstDetection = time.Now()
+		d.retryState.Condition = condition
+	}
+
+	// Increment attempt counter
+	d.retryState.CurrentAttempt++
+	d.retryState.LastAttempt = time.Now()
+
+	// Add to detection history
 	d.detectionHistory = append(d.detectionHistory, *condition)
 	if len(d.detectionHistory) > d.maxHistorySize {
 		d.detectionHistory = d.detectionHistory[1:]
@@ -488,39 +681,234 @@ func (d *StarvationDetector) checkAndAlert() error {
 		return fmt.Errorf("diagnostics failed: %w", err)
 	}
 
+	// Get backoff duration for this attempt
+	backoffDuration := d.getBackoffDuration(d.retryState.CurrentAttempt)
+
+	// Log attempt
+	if d.auditLogger != nil {
+		event := map[string]interface{}{
+			"action":            "starvation_retry_attempt",
+			"attempt_number":    d.retryState.CurrentAttempt,
+			"max_retries":       d.retryState.MaxRetries,
+			"backoff_duration":  backoffDuration.String(),
+			"open_beads":        condition.OpenBeads,
+			"ready_candidates":  condition.ReadyCandidates,
+			"timestamp":         time.Now().Format(time.RFC3339),
+		}
+		_ = d.auditLogger.Log(event)
+	}
+
 	// Publish event
 	if d.eventPublisher != nil {
 		event := map[string]interface{}{
-			"type":      "starvation_detected",
-			"condition": condition,
-			"report":    report,
-			"timestamp": time.Now().Format(time.RFC3339),
+			"type":              "starvation_detected",
+			"condition":         condition,
+			"report":            report,
+			"retry_attempt":     d.retryState.CurrentAttempt,
+			"max_retries":       d.retryState.MaxRetries,
+			"backoff_duration":  backoffDuration.String(),
+			"timestamp":         time.Now().Format(time.RFC3339),
 		}
 		_ = d.eventPublisher.Publish(event)
 	}
 
-	// Auto-repair if enabled
+	// Attempt repair with increasing aggressiveness based on attempt number
 	if d.autoRepairEnabled {
-		if err := d.autoRepair(report); err != nil {
-			// Log error but continue
+		repairErr := d.attemptRepair(report, d.retryState.CurrentAttempt)
+		if repairErr != nil {
+			// Log error but continue to retry logic
 			if d.auditLogger != nil {
 				event := map[string]interface{}{
-					"action":   "auto_repair_failed",
-					"error":    err.Error(),
-					"timestamp": time.Now().Format(time.RFC3339),
+					"action":         "auto_repair_failed",
+					"attempt_number": d.retryState.CurrentAttempt,
+					"error":          repairErr.Error(),
+					"timestamp":      time.Now().Format(time.RFC3339),
 				}
 				_ = d.auditLogger.Log(event)
 			}
 		}
 	}
 
-	// Create diagnostic bead for manual intervention issues
-	if err := d.createDiagnosticBead(report); err != nil {
-		return fmt.Errorf("failed to create diagnostic bead: %w", err)
+	// Check if we've exhausted retries
+	if d.retryState.CurrentAttempt >= d.retryState.MaxRetries {
+		// Max retries exhausted - create escalation bead
+		if err := d.createEscalationBead(report); err != nil {
+			return fmt.Errorf("failed to create escalation bead: %w", err)
+		}
+
+		// Update last alert time and reset retry state
+		d.lastAlertTime = time.Now()
+		d.resetRetryState()
+	} else {
+		// Not exhausted yet - wait for backoff before next attempt
+		// The retry will happen on the next checkAndAlert call after backoff
 	}
 
-	// Update last alert time
-	d.lastAlertTime = time.Now()
+	return nil
+}
+
+// shouldRetryNow checks if enough time has passed for the next retry
+func (d *StarvationDetector) shouldRetryNow() bool {
+	if d.retryState.CurrentAttempt == 0 {
+		return true
+	}
+
+	backoffDuration := d.getBackoffDuration(d.retryState.CurrentAttempt + 1)
+	return time.Since(d.retryState.LastAttempt) >= backoffDuration
+}
+
+// getBackoffDuration returns the backoff duration for a given attempt number
+func (d *StarvationDetector) getBackoffDuration(attemptNumber int) time.Duration {
+	if attemptNumber <= 0 || attemptNumber > len(d.retryState.BackoffDurations) {
+		return d.retryState.BackoffDurations[len(d.retryState.BackoffDurations)-1]
+	}
+	return d.retryState.BackoffDurations[attemptNumber-1]
+}
+
+// isSameCondition checks if the new condition is essentially the same as the stored one
+func (d *StarvationDetector) isSameCondition(newCondition *StarvationCondition) bool {
+	if d.retryState.Condition == nil {
+		return false
+	}
+
+	// Consider it the same condition if workspace and key metrics match
+	return d.retryState.Condition.Workspace == newCondition.Workspace &&
+		d.retryState.Condition.OpenBeads == newCondition.OpenBeads &&
+		d.retryState.Condition.ReadyCandidates == newCondition.ReadyCandidates
+}
+
+// resetRetryState resets the retry state when starvation is resolved
+func (d *StarvationDetector) resetRetryState() {
+	if d.retryState != nil && d.retryState.CurrentAttempt > 0 {
+		// Log resolution
+		if d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":         "starvation_resolved",
+				"attempts_made":  d.retryState.CurrentAttempt,
+				"timestamp":       time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+	}
+
+	d.retryState = &RetryState{
+		MaxRetries:       d.retryState.MaxRetries,
+		BackoffDurations: d.retryState.BackoffDurations,
+	}
+}
+
+// isTransientFailure checks if an error is transient (network issues, temporary locks, etc.)
+func (d *StarvationDetector) isTransientFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := err.Error()
+
+	// Network-related errors
+	transientPatterns := []string{
+		"connection refused",
+		"connection reset",
+		"timeout",
+		"temporary failure",
+		"resource temporarily unavailable",
+		"database is locked",
+		"database file is locked",
+		"no such file or directory", // May be temporary file system issues
+		"i/o timeout",
+		"dial tcp",
+		"network is unreachable",
+		"temporary", // generic catch-all
+	}
+
+	for _, pattern := range transientPatterns {
+		if strings.Contains(strings.ToLower(errMsg), pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// attemptRepair performs repairs with increasing aggressiveness based on attempt number
+func (d *StarvationDetector) attemptRepair(report *DiagnosticReport, attemptNumber int) error {
+	if !d.autoRepairEnabled {
+		return fmt.Errorf("auto-repair is disabled")
+	}
+
+	// Always attempt basic auto-repair
+	if err := d.autoRepair(report); err != nil {
+		return err
+	}
+
+	// On attempt 2+, try more aggressive repairs
+	if attemptNumber >= 2 {
+		// Attempt checkpoint sync
+		if err := d.syncCheckpoint(); err != nil && d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":         "checkpoint_sync_failed",
+				"attempt_number": attemptNumber,
+				"error":          err.Error(),
+				"timestamp":      time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+	}
+
+	// On attempt 3+, try service restart (if applicable)
+	if attemptNumber >= 3 {
+		// Attempt to clear any caches or temporary state
+		if err := d.clearCaches(); err != nil && d.auditLogger != nil {
+			event := map[string]interface{}{
+				"action":         "cache_clear_failed",
+				"attempt_number": attemptNumber,
+				"error":          err.Error(),
+				"timestamp":      time.Now().Format(time.RFC3339),
+			}
+			_ = d.auditLogger.Log(event)
+		}
+	}
+
+	return nil
+}
+
+// syncCheckpoint attempts to sync the checkpoint
+func (d *StarvationDetector) syncCheckpoint() error {
+	if d.dryRun {
+		return nil
+	}
+
+	cmd := exec.Command(d.binaryPath, "sync", "flush-only")
+	cmd.Dir = d.workspaceDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkpoint sync failed: %w\nOutput: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// clearCaches attempts to clear any caches or temporary state
+func (d *StarvationDetector) clearCaches() error {
+	if d.dryRun {
+		return nil
+	}
+
+	// Check for and clear any lock files in the .beads directory
+	beadsDir := filepath.Join(d.workspaceDir, ".beads")
+	lockFiles, err := filepath.Glob(filepath.Join(beadsDir, "*.lock"))
+	if err == nil {
+		for _, lockFile := range lockFiles {
+			// Try to remove stale lock files
+			if info, statErr := os.Stat(lockFile); statErr == nil {
+				// Only remove if older than 10 minutes
+				if time.Since(info.ModTime()) > 10*time.Minute {
+					os.Remove(lockFile)
+				}
+			}
+		}
+	}
 
 	return nil
 }

@@ -1,0 +1,23 @@
+[Unit]
+Description=TUNNEL Starvation Detector - Automated bead starvation detection and repair
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tunnel starvation-detector --daemon --auto-repair
+WorkingDirectory=/home/coding/TUNNEL
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=200%
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
