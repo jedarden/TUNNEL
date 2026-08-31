@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly TUNNEL Bead State Validation
+Documentation=https://github.com/jedarden/tunnel
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

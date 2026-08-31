@@ -1,0 +1,14 @@
+[Unit]
+Description=TUNNEL Bead State Validator
+Documentation=https://github.com/jedarden/tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=-/home/%i
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/local/bin/tunnel bead-validator --scheduled --workspace=/home/%i
+StandardOutput=journal
+StandardError=journal
