@@ -2,6 +2,7 @@ package vscodetunnel
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
@@ -108,12 +109,15 @@ func (v *VSCodeTunnelProvider) GetConnectionInfo() (*providers.ConnectionInfo, e
 
 // HealthCheck performs a health check
 func (v *VSCodeTunnelProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !v.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "VS Code CLI is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
@@ -124,27 +128,83 @@ func (v *VSCodeTunnelProvider) HealthCheck() (*providers.HealthStatus, error) {
 	if err != nil {
 		return &providers.HealthStatus{
 			Healthy:   false,
-			Status:    "error",
+			Status:    "cli_error",
 			Message:   fmt.Sprintf("VS Code CLI error: %v", err),
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
 	version := strings.TrimSpace(string(output))
-	connected := v.IsConnected()
-	status := "ready"
-	message := fmt.Sprintf("VS Code CLI available (version: %s)", strings.Split(version, "\n")[0])
 
-	if connected {
-		status = "connected"
-		message = "VS Code tunnel is active"
+	// Check if tunnel process is running
+	connected := v.IsConnected()
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   fmt.Sprintf("VS Code CLI available (version: %s) but tunnel is not active", strings.Split(version, "\n")[0]),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// VS Code tunnels typically expose a local port, test connectivity to the service
+	// Default VS Code server port is usually dynamic, but we can test if any local port is accessible
+	config, err := v.GetConfig()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "config_error",
+			Message:   fmt.Sprintf("Config error: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Try to test connectivity to common VS Code tunnel ports if configured
+	testPort := config.LocalPort
+	if testPort > 0 {
+		timeout := 2 * time.Second
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "unreachable",
+				Message:   fmt.Sprintf("VS Code tunnel service on port %d is not reachable: %v", testPort, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
+		conn.Close()
+	}
+
+	// If no specific port is configured, verify VS Code service connectivity
+	// by checking if the tunnel can reach VS Code's relay service
+	timeout := 3 * time.Second
+	conn, err := net.DialTimeout("tcp", "tunnel.antlr.vscode.dev:443", timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "relay_unreachable",
+			Message:   fmt.Sprintf("VS Code tunnel relay service is not reachable: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
+	message := fmt.Sprintf("VS Code tunnel is active (version: %s)", strings.Split(version, "\n")[0])
+	if testPort > 0 {
+		message += fmt.Sprintf(" with service reachable on port %d", testPort)
 	}
 
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
+		Healthy:   true,
+		Status:    "connected",
 		Message:   message,
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

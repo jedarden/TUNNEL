@@ -3,6 +3,7 @@ package tailscale
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -176,12 +177,15 @@ func (t *TailscaleProvider) GetConnectionInfo() (*providers.ConnectionInfo, erro
 
 // HealthCheck performs a health check
 func (t *TailscaleProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !t.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "Tailscale is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
@@ -192,15 +196,74 @@ func (t *TailscaleProvider) HealthCheck() (*providers.HealthStatus, error) {
 			Status:    "error",
 			Message:   err.Error(),
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
-	healthy := info.Status == "Running"
+	if info.Status != "Running" {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    info.Status,
+			Message:   fmt.Sprintf("Tailscale is not running (state: %s)", info.Status),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Verify actual VPN connectivity by testing if we can reach a peer
+	// or if we have a valid Tailscale IP
+	if len(info.Peers) == 0 && info.LocalIP == "" {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "no_connectivity",
+			Message:   "Tailscale is running but has no peers or local IP",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Test actual connectivity to the Tailscale coordination server
+	// This verifies the VPN path is working
+	timeout := 3 * time.Second
+	conn, err := net.DialTimeout("tcp", "controlplane.tailscale.com:443", timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "controlplane_unreachable",
+			Message:   fmt.Sprintf("Cannot reach Tailscale control plane: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
+	// If we have a local IP, verify it's actually assigned
+	// by attempting to bind to it
+	if info.LocalIP != "" {
+		// Verify the IP is valid by attempting a simple bind
+		addr := &net.TCPAddr{
+			IP:   net.ParseIP(info.LocalIP),
+			Port: 0, // Let OS choose port
+		}
+		listener, err := net.ListenTCP("tcp", addr)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "invalid_ip",
+				Message:   fmt.Sprintf("Tailscale IP %s is not usable: %v", info.LocalIP, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
+		listener.Close()
+	}
+
 	return &providers.HealthStatus{
-		Healthy:   healthy,
-		Status:    info.Status,
-		Message:   fmt.Sprintf("Tailscale is %s", strings.ToLower(info.Status)),
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("Tailscale VPN is connected with IP %s and %d peers", info.LocalIP, len(info.Peers)),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

@@ -2,6 +2,7 @@ package sshforward
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"time"
 
@@ -90,29 +91,68 @@ func (s *SSHForwardProvider) GetConnectionInfo() (*providers.ConnectionInfo, err
 
 // HealthCheck performs a health check
 func (s *SSHForwardProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !s.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "OpenSSH server is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if sshd process is running
 	connected := s.IsConnected()
-	status := "ready"
-	message := "SSH server is installed but not running"
-
-	if connected {
-		status = "connected"
-		message = "SSH server is running on port 22"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   "SSH server is not running",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
 	}
 
+	// Verify actual SSH port connectivity by testing port 22
+	config, err := s.GetConfig()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "error",
+			Message:   fmt.Sprintf("Config error: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Test SSH port (default 22, or configured port)
+	testPort := 22
+	if config.LocalPort > 0 {
+		testPort = config.LocalPort
+	}
+
+	// Try to connect to SSH port with timeout
+	timeout := 2 * time.Second
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "unreachable",
+			Message:   fmt.Sprintf("SSH port %d is not accepting connections: %v", testPort, err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   message,
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("SSH server is reachable on port %d", testPort),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

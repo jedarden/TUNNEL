@@ -3,6 +3,7 @@ package zerotier
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
@@ -191,12 +192,15 @@ func (z *ZeroTierProvider) GetConnectionInfo() (*providers.ConnectionInfo, error
 
 // HealthCheck performs a health check
 func (z *ZeroTierProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !z.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "ZeroTier is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
@@ -209,6 +213,7 @@ func (z *ZeroTierProvider) HealthCheck() (*providers.HealthStatus, error) {
 			Status:    "error",
 			Message:   "ZeroTier service is not running",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
@@ -220,17 +225,76 @@ func (z *ZeroTierProvider) HealthCheck() (*providers.HealthStatus, error) {
 		nodeID = parts[2]
 	}
 
+	// Check if connected to network
 	connected := z.IsConnected()
-	status := "disconnected"
-	if connected {
-		status = "connected"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   fmt.Sprintf("ZeroTier node %s is not connected to any network", nodeID),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Get connection info to verify actual VPN connectivity
+	connInfo, err := z.GetConnectionInfo()
+	if err != nil || connInfo.Status != "ok" {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "network_error",
+			Message:   fmt.Sprintf("ZeroTier network is not OK (status: %s)", connInfo.Status),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Verify actual VPN connectivity by testing if we can reach ZeroTier's service
+	// This confirms the VPN path is working
+	timeout := 3 * time.Second
+	conn, err := net.DialTimeout("tcp", "my.zerotier.com:443", timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "service_unreachable",
+			Message:   fmt.Sprintf("Cannot reach ZeroTier service: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
+	// If we have a local IP, verify it's valid
+	if connInfo.LocalIP != "" {
+		// Try to bind to the assigned IP to verify it's usable
+		ipAddr := &net.TCPAddr{
+			IP:   net.ParseIP(connInfo.LocalIP),
+			Port: 0,
+		}
+		listener, err := net.ListenTCP("tcp", ipAddr)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "invalid_ip",
+				Message:   fmt.Sprintf("ZeroTier IP %s is not usable: %v", connInfo.LocalIP, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
+		listener.Close()
+	}
+
+	networkName := "unknown"
+	if name, ok := connInfo.Extra["network_name"].(string); ok {
+		networkName = name
 	}
 
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   fmt.Sprintf("ZeroTier node %s is %s", nodeID, status),
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("ZeroTier node %s is connected to network '%s' with IP %s", nodeID, networkName, connInfo.LocalIP),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

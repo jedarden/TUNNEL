@@ -183,35 +183,101 @@ func (n *NgrokProvider) GetConnectionInfo() (*providers.ConnectionInfo, error) {
 
 // HealthCheck performs a health check
 func (n *NgrokProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !n.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "ngrok is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if ngrok process is running
 	connected := n.IsConnected()
-	status := "disconnected"
-	message := "ngrok is not running"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   "ngrok tunnel is not active",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
 
-	if connected {
-		status = "connected"
-		message = "ngrok tunnel is active"
+	// Get tunnel info to verify actual HTTP reachability
+	info, err := n.GetConnectionInfo()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "error",
+			Message:   fmt.Sprintf("Failed to get tunnel info: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
 
-		// Try to get tunnel info
-		info, err := n.GetConnectionInfo()
-		if err == nil && info.TunnelURL != "" {
-			message = fmt.Sprintf("ngrok tunnel active at %s", info.TunnelURL)
+	if info.TunnelURL == "" {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "no_tunnel",
+			Message:   "ngrok process is running but no tunnel URL found",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Test HTTP reachability to the tunnel URL
+	timeout := 5 * time.Second
+	client := &http.Client{
+		Timeout: timeout,
+		// Don't follow redirects - we just want to verify the tunnel is reachable
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Make a simple HTTP request to verify tunnel is responding
+	testURL := info.TunnelURL
+	if strings.HasPrefix(testURL, "tcp://") {
+		// For TCP tunnels, we need to test the port directly
+		// Extract host:port from tcp://host:port
+		parts := strings.TrimPrefix(testURL, "tcp://")
+		timeout := 2 * time.Second
+		conn, err := net.DialTimeout("tcp", parts, timeout)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "unreachable",
+				Message:   fmt.Sprintf("ngrok TCP tunnel at %s is not reachable: %v", testURL, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
 		}
+		conn.Close()
+	} else {
+		// For HTTP/HTTPS tunnels, make an HTTP request
+		resp, err := client.Get(testURL)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "unreachable",
+				Message:   fmt.Sprintf("ngrok tunnel at %s is not reachable: %v", testURL, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
+		resp.Body.Close()
 	}
 
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   message,
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("ngrok tunnel is reachable at %s", info.TunnelURL),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

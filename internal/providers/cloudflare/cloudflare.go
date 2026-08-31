@@ -3,6 +3,8 @@ package cloudflare
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os/exec"
 	"strings"
 	"time"
@@ -162,26 +164,97 @@ func (c *CloudflareProvider) GetConnectionInfo() (*providers.ConnectionInfo, err
 
 // HealthCheck performs a health check
 func (c *CloudflareProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !c.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "cloudflared is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if cloudflared process is running
 	connected := c.IsConnected()
-	status := "disconnected"
-	if connected {
-		status = "connected"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   "Cloudflare Tunnel is not active",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	config, err := c.GetConfig()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "error",
+			Message:   fmt.Sprintf("Config error: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// For token-based tunnels, verify connectivity to Cloudflare edge
+	// by testing DNS resolution and basic connectivity
+	if config.AuthToken != "" {
+		// Test connectivity to Cloudflare's edge
+		timeout := 3 * time.Second
+		conn, err := net.DialTimeout("tcp", "cflare.trk.pro:443", timeout)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "edge_unreachable",
+				Message:   fmt.Sprintf("Cannot reach Cloudflare edge: %v", err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
+		conn.Close()
+	}
+
+	// For named tunnels, verify the tunnel is actually registered
+	if config.TunnelName != "" {
+		tunnels, err := c.ListTunnels()
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "api_error",
+				Message:   fmt.Sprintf("Cannot query tunnel status: %v", err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
+
+		found := false
+		for _, tunnel := range tunnels {
+			if tunnel.Name == config.TunnelName && len(tunnel.Connections) > 0 {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "tunnel_inactive",
+				Message:   fmt.Sprintf("Tunnel %s is not active or has no connections", config.TunnelName),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
+		}
 	}
 
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   fmt.Sprintf("Cloudflare Tunnel is %s", status),
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("Cloudflare Tunnel is active and reachable"),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

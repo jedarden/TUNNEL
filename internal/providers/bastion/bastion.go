@@ -2,6 +2,7 @@ package bastion
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"time"
 
@@ -91,29 +92,67 @@ func (b *BastionProvider) GetConnectionInfo() (*providers.ConnectionInfo, error)
 
 // HealthCheck performs a health check
 func (b *BastionProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !b.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "OpenSSH server is not installed for bastion mode",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if SSH server is running
 	connected := b.IsConnected()
-	status := "ready"
-	message := "SSH server is installed, bastion mode ready"
-
-	if connected {
-		status = "connected"
-		message = "Bastion host is active and accepting connections"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   "SSH server is not running, bastion mode not active",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
 	}
 
+	// Verify actual SSH port connectivity (default port 22)
+	config, err := b.GetConfig()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "error",
+			Message:   fmt.Sprintf("Config error: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	testPort := 22
+	if config.LocalPort > 0 {
+		testPort = config.LocalPort
+	}
+
+	// Test SSH port is accepting connections
+	timeout := 2 * time.Second
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "unreachable",
+			Message:   fmt.Sprintf("SSH port %d is not accepting connections: %v", testPort, err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   message,
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("Bastion host is active and SSH port %d is accepting connections", testPort),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

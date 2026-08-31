@@ -2,6 +2,7 @@ package reversessh
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"time"
 
@@ -136,29 +137,69 @@ func (r *ReverseSSHProvider) GetConnectionInfo() (*providers.ConnectionInfo, err
 
 // HealthCheck performs a health check
 func (r *ReverseSSHProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !r.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "SSH client is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if reverse SSH tunnel process is running
 	connected := r.IsConnected()
-	status := "ready"
-	message := "SSH client is available for reverse tunneling"
-
-	if connected {
-		status = "connected"
-		message = "Reverse SSH tunnel is active"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   "Reverse SSH tunnel is not active",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
 	}
 
+	// Verify actual SSH service reachability on the target port
+	config, err := r.GetConfig()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "error",
+			Message:   fmt.Sprintf("Config error: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Get the local port being forwarded (default 22)
+	testPort := 22
+	if config.LocalPort > 0 {
+		testPort = config.LocalPort
+	}
+
+	// Test if the local SSH service is accessible through the tunnel
+	// by connecting to localhost:22 (or configured port)
+	timeout := 2 * time.Second
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "unreachable",
+			Message:   fmt.Sprintf("SSH service on port %d is not accessible through tunnel: %v", testPort, err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   message,
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("Reverse SSH tunnel is active and SSH service reachable on port %d", testPort),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

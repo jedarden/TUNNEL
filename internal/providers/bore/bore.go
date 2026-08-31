@@ -2,6 +2,7 @@ package bore
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -206,33 +207,89 @@ func (b *BoreProvider) GetConnectionInfo() (*providers.ConnectionInfo, error) {
 
 // HealthCheck performs a health check
 func (b *BoreProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !b.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "bore is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if bore process is running
 	connected := b.IsConnected()
-	status := "disconnected"
-	message := "bore tunnel is not active"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   "bore tunnel is not active",
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
 
-	if connected {
-		status = "connected"
-		message = "bore tunnel is active"
+	config, err := b.GetConfig()
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "error",
+			Message:   fmt.Sprintf("Config error: %v", err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
 
-		if b.tunnelURL != "" {
-			message = fmt.Sprintf("bore tunnel active at %s", b.tunnelURL)
+	// Get local port being forwarded
+	testPort := config.LocalPort
+	if testPort == 0 {
+		testPort = 22 // Default to SSH
+	}
+
+	// Verify actual TCP tunnel reachability by testing local port
+	timeout := 2 * time.Second
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
+	if err != nil {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "unreachable",
+			Message:   fmt.Sprintf("Local service on port %d is not reachable through tunnel: %v", testPort, err),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+	conn.Close()
+
+	// If we have a tunnel URL, test the remote endpoint too
+	if b.tunnelURL != "" {
+		// Test connectivity to the bore.pub endpoint
+		timeout = 3 * time.Second
+		conn, err := net.DialTimeout("tcp", b.tunnelURL, timeout)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "remote_unreachable",
+				Message:   fmt.Sprintf("bore remote endpoint %s is not reachable: %v", b.tunnelURL, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+			}, nil
 		}
+		conn.Close()
+	}
+
+	message := fmt.Sprintf("bore tunnel is active and local service on port %d is reachable", testPort)
+	if b.tunnelURL != "" {
+		message += fmt.Sprintf(" via %s", b.tunnelURL)
 	}
 
 	return &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
+		Healthy:   true,
+		Status:    "connected",
 		Message:   message,
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 	}, nil
 }
 

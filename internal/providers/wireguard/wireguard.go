@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"regexp"
@@ -164,46 +165,123 @@ func (w *WireGuardProvider) GetConnectionInfo() (*providers.ConnectionInfo, erro
 
 // HealthCheck performs a health check
 func (w *WireGuardProvider) HealthCheck() (*providers.HealthStatus, error) {
+	start := time.Now()
+
 	if !w.IsInstalled() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
 			Message:   "WireGuard is not installed",
 			LastCheck: time.Now(),
+			Latency:   time.Since(start),
 		}, nil
 	}
 
+	// Check if interface is up
 	connected := w.IsConnected()
-	status := "disconnected"
-	if connected {
-		status = "connected"
+	if !connected {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "disconnected",
+			Message:   fmt.Sprintf("WireGuard interface %s is not up", w.interfaceName),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
+	}
+
+	// Get connection info to verify actual VPN connectivity
+	connInfo, err := w.GetConnectionInfo()
+	if err != nil || connInfo.Status != "connected" {
+		return &providers.HealthStatus{
+			Healthy:   false,
+			Status:    "interface_error",
+			Message:   fmt.Sprintf("WireGuard interface %s has errors", w.interfaceName),
+			LastCheck: time.Now(),
+			Latency:   time.Since(start),
+		}, nil
 	}
 
 	health := &providers.HealthStatus{
-		Healthy:   connected,
-		Status:    status,
-		Message:   fmt.Sprintf("WireGuard is %s", status),
+		Healthy:   true,
+		Status:    "connected",
+		Message:   fmt.Sprintf("WireGuard interface %s is up", w.interfaceName),
 		LastCheck: time.Now(),
+		Latency:   time.Since(start),
 		Metrics:   make(map[string]interface{}),
 	}
 
-	if connected {
-		// Get transfer statistics
-		cmd := exec.Command("wg", "show", w.interfaceName, "transfer")
-		output, err := cmd.Output()
-		if err == nil {
-			lines := strings.Split(string(output), "\n")
-			for _, line := range lines {
-				parts := strings.Fields(line)
-				if len(parts) >= 3 {
-					sent, _ := strconv.ParseUint(parts[1], 10, 64)
-					received, _ := strconv.ParseUint(parts[2], 10, 64)
-					health.BytesSent = sent
-					health.BytesReceived = received
-					break
-				}
+	// Get transfer statistics
+	cmd := exec.Command("wg", "show", w.interfaceName, "transfer")
+	output, err := cmd.Output()
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				sent, _ := strconv.ParseUint(parts[1], 10, 64)
+				received, _ := strconv.ParseUint(parts[2], 10, 64)
+				health.BytesSent = sent
+				health.BytesReceived = received
+				break
 			}
 		}
+	}
+
+	// Verify actual VPN connectivity by testing the endpoint
+	// If we have a remote endpoint, test connectivity to it
+	if connInfo.RemoteIP != "" {
+		// Extract host:port from endpoint (format: "host:port")
+		timeout := 3 * time.Second
+		conn, err := net.DialTimeout("udp", connInfo.RemoteIP, timeout)
+		if err != nil {
+			// UDP might not establish connection immediately, try TCP test instead
+			// as a fallback for connectivity verification
+			parts := strings.Split(connInfo.RemoteIP, ":")
+			if len(parts) == 2 {
+				testAddr := fmt.Sprintf("%s:%s", parts[0], parts[1])
+				conn, err := net.DialTimeout("tcp", testAddr, timeout)
+				if err != nil {
+					return &providers.HealthStatus{
+						Healthy:   false,
+						Status:    "endpoint_unreachable",
+						Message:   fmt.Sprintf("WireGuard endpoint %s is not reachable: %v", connInfo.RemoteIP, err),
+						LastCheck: time.Now(),
+						Latency:   time.Since(start),
+						Metrics:   health.Metrics,
+					}, nil
+				}
+				conn.Close()
+			}
+		} else {
+			conn.Close()
+		}
+	}
+
+	// If we have a local IP, verify it's valid and usable
+	if connInfo.LocalIP != "" {
+		// Try to bind to the assigned IP to verify it's usable
+		ipAddr := &net.TCPAddr{
+			IP:   net.ParseIP(connInfo.LocalIP),
+			Port: 0,
+		}
+		listener, err := net.ListenTCP("tcp", ipAddr)
+		if err != nil {
+			return &providers.HealthStatus{
+				Healthy:   false,
+				Status:    "invalid_ip",
+				Message:   fmt.Sprintf("WireGuard IP %s is not usable: %v", connInfo.LocalIP, err),
+				LastCheck: time.Now(),
+				Latency:   time.Since(start),
+				Metrics:   health.Metrics,
+			}, nil
+		}
+		listener.Close()
+	}
+
+	peerCount := len(connInfo.Peers)
+	health.Message = fmt.Sprintf("WireGuard interface %s is up with %d peers", w.interfaceName, peerCount)
+	if connInfo.LocalIP != "" {
+		health.Message += fmt.Sprintf(" (IP: %s)", connInfo.LocalIP)
 	}
 
 	return health, nil
