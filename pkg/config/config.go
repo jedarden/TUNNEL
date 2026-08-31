@@ -65,12 +65,71 @@ type SSHConfig struct {
 
 // MonitoringConfig contains monitoring and audit configuration
 type MonitoringConfig struct {
-	Enabled        bool   `yaml:"enabled"`
-	AuditLog       string `yaml:"audit_log"`
-	Syslog         bool   `yaml:"syslog"`
-	SyslogServer   string `yaml:"syslog_server"`
-	MetricsEnabled bool   `yaml:"metrics_enabled"`
-	MetricsPort    int    `yaml:"metrics_port"`
+	Enabled          bool                `yaml:"enabled"`
+	AuditLog         string              `yaml:"audit_log"`
+	Syslog           bool                `yaml:"syslog"`
+	SyslogServer     string              `yaml:"syslog_server"`
+	MetricsEnabled   bool                `yaml:"metrics_enabled"`
+	MetricsPort      int                 `yaml:"metrics_port"`
+	MetricsRetention time.Duration       `yaml:"metrics_retention"` // Retention period for metrics history
+	CheckpointMonitor CheckpointMonitorConfig `yaml:"checkpoint_monitor"`
+}
+
+// CheckpointMonitorConfig contains checkpoint monitoring configuration
+type CheckpointMonitorConfig struct {
+	Enabled              bool          `yaml:"enabled"`
+	MaxDatabaseSize      int64         `yaml:"max_database_size_mb"`       // MB
+	MaxForensicSize      int64         `yaml:"max_forensic_size_mb"`       // MB
+	MaxObjectsDirSize    int64         `yaml:"max_objects_dir_size_mb"`   // MB
+	MaxIssueCount        int           `yaml:"max_issue_count"`
+	MaxForensicLineCount int           `yaml:"max_forensic_line_count"`
+	MaxTotalRecordCount  int           `yaml:"max_total_record_count"`
+	CheckInterval        time.Duration `yaml:"check_interval"`    // e.g., 5m, 1h
+	AlertCooldown        time.Duration `yaml:"alert_cooldown"`    // e.g., 1h
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling for CheckpointMonitorConfig
+// to convert MB values to bytes and parse duration strings
+func (cmc *CheckpointMonitorConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type Alias CheckpointMonitorConfig
+	aux := &struct {
+		*Alias
+		MaxDatabaseSizeMB      int    `yaml:"max_database_size_mb"`
+		MaxForensicSizeMB      int    `yaml:"max_forensic_size_mb"`
+		MaxObjectsDirSizeMB    int    `yaml:"max_objects_dir_size_mb"`
+		CheckIntervalStr       string `yaml:"check_interval"`
+		AlertCooldownStr       string `yaml:"alert_cooldown"`
+	}{
+		Alias: (*Alias)(cmc),
+	}
+
+	if err := unmarshal(aux); err != nil {
+		return err
+	}
+
+	// Convert MB to bytes
+	cmc.MaxDatabaseSize = int64(aux.MaxDatabaseSizeMB) * 1024 * 1024
+	cmc.MaxForensicSize = int64(aux.MaxForensicSizeMB) * 1024 * 1024
+	cmc.MaxObjectsDirSize = int64(aux.MaxObjectsDirSizeMB) * 1024 * 1024
+
+	// Parse duration strings
+	if aux.CheckIntervalStr != "" {
+		d, err := time.ParseDuration(aux.CheckIntervalStr)
+		if err != nil {
+			return fmt.Errorf("invalid check_interval format: %w", err)
+		}
+		cmc.CheckInterval = d
+	}
+
+	if aux.AlertCooldownStr != "" {
+		d, err := time.ParseDuration(aux.AlertCooldownStr)
+		if err != nil {
+			return fmt.Errorf("invalid alert_cooldown format: %w", err)
+		}
+		cmc.AlertCooldown = d
+	}
+
+	return nil
 }
 
 var (

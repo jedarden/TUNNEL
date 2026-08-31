@@ -111,6 +111,17 @@ func GetDefaultConfig() *Config {
 			SyslogServer:   "",
 			MetricsEnabled: false,
 			MetricsPort:    9090,
+			CheckpointMonitor: CheckpointMonitorConfig{
+				Enabled:              false,
+				MaxDatabaseSize:      100 * 1024 * 1024, // 100 MB
+				MaxForensicSize:      50 * 1024 * 1024,  // 50 MB
+				MaxObjectsDirSize:    200 * 1024 * 1024, // 200 MB
+				MaxIssueCount:        1000,
+				MaxForensicLineCount: 10000,
+				MaxTotalRecordCount:  5000,
+				CheckInterval:        5 * 60 * 1000000000, // 5 minutes in nanoseconds
+				AlertCooldown:        60 * 60 * 1000000000, // 1 hour in nanoseconds
+			},
 		},
 	}
 }

@@ -33,26 +33,33 @@ type ConnectionManager interface {
 
 // DefaultConnectionManager implements ConnectionManager
 type DefaultConnectionManager struct {
-	mu               sync.RWMutex
-	connections      map[string]*Connection
-	providers        map[string]ConnectionProvider // Provider implementations
-	eventPublisher   *EventPublisher
-	metricsCollector *DefaultMetricsCollector
-	failoverManager  *FailoverManager
-	config           *ManagerConfig
-	ctx              context.Context
-	cancel           context.CancelFunc
+	mu                sync.RWMutex
+	connections       map[string]*Connection
+	providers         map[string]ConnectionProvider // Provider implementations
+	eventPublisher    *EventPublisher
+	metricsCollector  *DefaultMetricsCollector
+	failoverManager   *FailoverManager
+	checkpointMonitor *CheckpointMonitor // Checkpoint monitoring
+	config            *ManagerConfig
+	ctx               context.Context
+	cancel            context.CancelFunc
+	workspaceDir      string // Workspace directory for checkpoint monitoring
 }
 
 // ManagerConfig holds configuration for the connection manager
 type ManagerConfig struct {
-	EnableMetrics    bool
-	EnableFailover   bool
-	FailoverConfig   *FailoverConfig
-	MetricsInterval  time.Duration
-	EventBufferSize  int
-	DataDir          string // Directory for persistent storage (e.g., ~/.config/tunnel/)
-	EnablePersistence bool  // Whether to enable metrics history persistence
+	EnableMetrics       bool
+	EnableFailover      bool
+	FailoverConfig      *FailoverConfig
+	MetricsInterval     time.Duration
+	EventBufferSize     int
+	DataDir             string // Directory for persistent storage (e.g., ~/.config/tunnel/)
+	EnablePersistence   bool  // Whether to enable metrics history persistence
+	MetricsRetention    time.Duration // How long to keep metrics history (default: 30 days)
+	EnableCheckpointMonitor bool // Whether to enable checkpoint monitoring
+	CheckpointThresholds *CheckpointThresholds // Checkpoint monitoring thresholds
+	WorkspaceDir        string // Workspace directory containing .beads (for checkpoint monitoring)
+	AuditLogger         *AuditLogger
 }
 
 // DefaultManagerConfig returns a manager config with sensible defaults
@@ -65,13 +72,14 @@ func DefaultManagerConfig() *ManagerConfig {
 	dataDir := filepath.Join(homeDir, ".config", "tunnel")
 
 	return &ManagerConfig{
-		EnableMetrics:    true,
-		EnableFailover:   true,
-		FailoverConfig:   DefaultFailoverConfig(),
-		MetricsInterval:  10 * time.Second,
-		EventBufferSize:  100,
-		DataDir:          dataDir,
+		EnableMetrics:     true,
+		EnableFailover:    true,
+		FailoverConfig:    DefaultFailoverConfig(),
+		MetricsInterval:   10 * time.Second,
+		EventBufferSize:   100,
+		DataDir:           dataDir,
 		EnablePersistence: true, // Enable persistence by default
+		MetricsRetention:  30 * 24 * time.Hour, // Keep metrics for 30 days by default
 	}
 }
 
@@ -119,15 +127,27 @@ func NewConnectionManager(config *ManagerConfig) *DefaultConnectionManager {
 		failover = NewFailoverManager(config.FailoverConfig, publisher, collector, nil, persistence)
 	}
 
+	// Initialize checkpoint monitor if enabled
+	var checkpointMonitor *CheckpointMonitor
+	if config.EnableCheckpointMonitor && config.WorkspaceDir != "" {
+		thresholds := config.CheckpointThresholds
+		if thresholds == nil {
+			thresholds = DefaultCheckpointThresholds()
+		}
+		checkpointMonitor = NewCheckpointMonitor(config.WorkspaceDir, thresholds, publisher, config.AuditLogger)
+	}
+
 	manager := &DefaultConnectionManager{
-		connections:      make(map[string]*Connection),
-		providers:        make(map[string]ConnectionProvider),
-		eventPublisher:   publisher,
-		metricsCollector: collector,
-		failoverManager:  failover,
-		config:           config,
-		ctx:              ctx,
-		cancel:           cancel,
+		connections:       make(map[string]*Connection),
+		providers:         make(map[string]ConnectionProvider),
+		eventPublisher:    publisher,
+		metricsCollector:  collector,
+		failoverManager:   failover,
+		checkpointMonitor: checkpointMonitor,
+		config:            config,
+		ctx:               ctx,
+		cancel:            cancel,
+		workspaceDir:      config.WorkspaceDir,
 	}
 
 	// Start metrics collection
@@ -138,6 +158,16 @@ func NewConnectionManager(config *ManagerConfig) *DefaultConnectionManager {
 	// Start failover monitoring
 	if config.EnableFailover && failover != nil {
 		failover.Start()
+	}
+
+	// Start checkpoint monitoring
+	if config.EnableCheckpointMonitor && checkpointMonitor != nil {
+		checkpointMonitor.Start()
+	}
+
+	// Start metrics cleanup scheduler if persistence is enabled
+	if config.EnablePersistence && persistence != nil && config.MetricsRetention > 0 {
+		go manager.startMetricsCleanup(persistence, config.MetricsRetention)
 	}
 
 	return manager
@@ -473,6 +503,11 @@ func (m *DefaultConnectionManager) Shutdown() error {
 		m.metricsCollector.Stop()
 	}
 
+	// Stop checkpoint monitoring
+	if m.checkpointMonitor != nil {
+		m.checkpointMonitor.Stop()
+	}
+
 	// Close persistence service
 	if m.config.EnablePersistence && m.metricsCollector != nil {
 		if persistence := m.metricsCollector.persistence; persistence != nil {
@@ -492,6 +527,28 @@ func (m *DefaultConnectionManager) Shutdown() error {
 	m.cancel()
 
 	return nil
+}
+
+// startMetricsCleanup runs periodic cleanup of old metrics data
+func (m *DefaultConnectionManager) startMetricsCleanup(persistence *MetricsHistoryService, retention time.Duration) {
+	ticker := time.NewTicker(24 * time.Hour) // Run cleanup once daily
+	defer ticker.Stop()
+
+	// Run initial cleanup on startup
+	if err := persistence.CleanupOldData(retention); err != nil {
+		fmt.Printf("Warning: Initial metrics cleanup failed: %v\n", err)
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := persistence.CleanupOldData(retention); err != nil {
+				fmt.Printf("Warning: Metrics cleanup failed: %v\n", err)
+			}
+		case <-m.ctx.Done():
+			return
+		}
+	}
 }
 
 // GetMetrics exports current metrics
@@ -550,3 +607,34 @@ func (m *DefaultConnectionManager) GetAllConnectionsStats(since time.Time) (map[
 	}
 	return persistence.GetAllConnectionsStats(since)
 }
+
+// GetCheckpointMonitor returns the checkpoint monitor
+func (m *DefaultConnectionManager) GetCheckpointMonitor() *CheckpointMonitor {
+	return m.checkpointMonitor
+}
+
+// GetCheckpointMetrics returns current checkpoint metrics
+func (m *DefaultConnectionManager) GetCheckpointMetrics() (*CheckpointMetrics, error) {
+	if m.checkpointMonitor == nil {
+		return nil, fmt.Errorf("checkpoint monitor not enabled")
+	}
+	return m.checkpointMonitor.GetMetrics()
+}
+
+// UpdateCheckpointThresholds updates the checkpoint monitoring thresholds
+func (m *DefaultConnectionManager) UpdateCheckpointThresholds(thresholds *CheckpointThresholds) error {
+	if m.checkpointMonitor == nil {
+		return fmt.Errorf("checkpoint monitor not enabled")
+	}
+	m.checkpointMonitor.SetThresholds(thresholds)
+	return nil
+}
+
+// GetCheckpointAlerts returns recent checkpoint alert times
+func (m *DefaultConnectionManager) GetCheckpointAlerts() (map[string]time.Time, error) {
+	if m.checkpointMonitor == nil {
+		return nil, fmt.Errorf("checkpoint monitor not enabled")
+	}
+	return m.checkpointMonitor.GetLastAlertTimes(), nil
+}
+

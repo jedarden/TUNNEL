@@ -160,3 +160,34 @@ monitoring:
   # Metrics history retention period (e.g., 720h = 30 days, 168h = 7 days)
   # Controls how long historical connection metrics, uptime data, and failover events are stored
   metrics_retention: 720h
+
+  # Checkpoint monitoring configuration
+  # Monitors bead checkpoint database and file sizes/counts, generates alerts when thresholds exceeded
+  checkpoint_monitor:
+    # Enable checkpoint monitoring
+    enabled: false
+
+    # Maximum database file size (MB)
+    max_database_size_mb: 100
+
+    # Maximum forensic.jsonl file size (MB)
+    max_forensic_size_mb: 50
+
+    # Maximum objects directory size (MB)
+    max_objects_dir_size_mb: 200
+
+    # Maximum issue count in database
+    max_issue_count: 1000
+
+    # Maximum forensic.jsonl line count
+    max_forensic_line_count: 10000
+
+    # Maximum total record count
+    max_total_record_count: 5000
+
+    # Check interval (e.g., 5m, 1h)
+    check_interval: 5m
+
+    # Alert cooldown period (e.g., 1h, 30m)
+    # Minimum time between alerts for the same metric
+    alert_cooldown: 1h
