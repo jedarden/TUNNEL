@@ -26,6 +26,13 @@ type StarvationCondition struct {
 	DBInconsistent     bool        `json:"db_inconsistent"`
 	FallbackAnalysis   *FallbackAnalysis `json:"fallback_analysis,omitempty"`
 	CorruptionDetections []CorruptionDetection `json:"corruption_detections,omitempty"`
+
+	// Diagnostic query details
+	UsedQuery          string      `json:"used_query,omitempty"`
+	QueryFilters       []string    `json:"query_filters,omitempty"`
+	ActualOpenCount    int         `json:"actual_open_count,omitempty"`
+	ActualReadyCount   int         `json:"actual_ready_count,omitempty"`
+	QueryTimestamp     time.Time   `json:"query_timestamp,omitempty"`
 }
 
 // StarvationDetector monitors for bead starvation conditions
@@ -204,9 +211,12 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 // detectStarvation checks for starvation conditions
 func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 	condition := &StarvationCondition{
-		Timestamp: time.Now(),
-		Workspace: d.workspaceDir,
+		Timestamp:    time.Now(),
+		Workspace:    d.workspaceDir,
+		QueryTimestamp: time.Now(),
 	}
+	condition.UsedQuery = "list"
+	condition.QueryFilters = []string{"--ready"}
 
 	// Get ready candidates using automated retry with exponential backoff
 	readyBeads, err := d.listBeadsWithRetry("--ready")
@@ -214,6 +224,7 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 		return nil, fmt.Errorf("failed to list ready beads with retry: %w", err)
 	}
 	condition.ReadyCandidates = len(readyBeads)
+	condition.ActualReadyCount = len(readyBeads)
 
 	// Get all open beads
 	openBeads, err := d.listBeads("--status", "open")
@@ -221,6 +232,7 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 		return nil, fmt.Errorf("failed to list open beads: %w", err)
 	}
 	condition.OpenBeads = len(openBeads)
+	condition.ActualOpenCount = len(openBeads)
 
 	// Check if starvation condition exists
 	if condition.OpenBeads == 0 {
@@ -232,6 +244,11 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 		// Have ready candidates, no starvation
 		return nil, nil
 	}
+
+	// Discrepancy detected: zero ready candidates but open beads exist
+	// Log comprehensive diagnostics before proceeding
+	diagnostics := d.buildDiagnosticSnapshot(condition, "bead list --ready", []string{"--ready"})
+	d.logStarvationDiagnostics(diagnostics)
 
 	// Starvation detected! Run fallback queries to diagnose why
 	fallbackAnalysis, err := d.fallbackExecutor.ExecuteFallbackQueries()
@@ -381,6 +398,116 @@ func (d *StarvationDetector) isBeadClosed(beadID string) bool {
 	return bead.Status == BeadStateClosed
 }
 
+// logStarvationDiagnostics creates a comprehensive structured log entry with full diagnostic state
+// This captures all available context when a discrepancy is detected, enabling post-facto analysis
+func (d *StarvationDetector) logStarvationDiagnostics(diagnostics map[string]interface{}) {
+	if d.auditLogger == nil {
+		return
+	}
+
+	// Ensure all diagnostic fields are present
+	if diagnostics["timestamp"] == nil {
+		diagnostics["timestamp"] = time.Now().Format(time.RFC3339)
+	}
+	if diagnostics["workspace"] == nil {
+		diagnostics["workspace"] = d.workspaceDir
+	}
+
+	// Create structured JSON log entry
+	logData := map[string]interface{}{
+		"action":               "starvation_diagnostics",
+		"timestamp":            diagnostics["timestamp"],
+		"workspace":            diagnostics["workspace"],
+		"open_beads_count":     diagnostics["open_beads_count"],
+		"ready_candidates":     diagnostics["ready_candidates"],
+		"excluded_beads":       diagnostics["excluded_beads"],
+		"used_query":           diagnostics["used_query"],
+		"query_filters":        diagnostics["query_filters"],
+		"actual_open_count":    diagnostics["actual_open_count"],
+		"actual_ready_count":   diagnostics["actual_ready_count"],
+		"query_timestamp":      diagnostics["query_timestamp"],
+		"exclusion_reasons":    diagnostics["exclusion_reasons"],
+		"stale_assignees":      diagnostics["stale_assignees"],
+		"closed_with_assignee": diagnostics["closed_with_assignee"],
+		"circular_deps":        diagnostics["circular_deps"],
+		"db_inconsistent":      diagnostics["db_inconsistent"],
+	}
+
+	// Add fallback analysis if available
+	if fallbackAnalysis, ok := diagnostics["fallback_analysis"]; ok && fallbackAnalysis != nil {
+		logData["fallback_analysis"] = fallbackAnalysis
+	}
+
+	// Add corruption detections if available
+	if corruptionDetections, ok := diagnostics["corruption_detections"]; ok && corruptionDetections != nil {
+		logData["corruption_detections"] = corruptionDetections
+	}
+
+	// Log the structured entry
+	if err := d.auditLogger.Log(logData); err != nil {
+		// If logging fails, try to write to a fallback file
+		d.writeFallbackDiagnostics(logData)
+	}
+}
+
+// writeFallbackDiagnostics writes diagnostic data to a fallback file when audit logging fails
+func (d *StarvationDetector) writeFallbackDiagnostics(diagnostics map[string]interface{}) {
+	diagnosticsDir := filepath.Join(d.workspaceDir, ".beads", "diagnostics")
+	if err := os.MkdirAll(diagnosticsDir, 0755); err != nil {
+		return
+	}
+
+	timestamp := time.Now().Format("20060102-150405")
+	fallbackFile := filepath.Join(diagnosticsDir, fmt.Sprintf("starvation-alert-%s.json", timestamp))
+
+	data, err := json.MarshalIndent(diagnostics, "", "  ")
+	if err != nil {
+		return
+	}
+
+	if err := os.WriteFile(fallbackFile, data, 0644); err != nil {
+		return
+	}
+}
+
+// buildDiagnosticSnapshot creates a comprehensive diagnostic snapshot from current detection state
+func (d *StarvationDetector) buildDiagnosticSnapshot(condition *StarvationCondition, query string, filters []string) map[string]interface{} {
+	diagnostics := make(map[string]interface{})
+
+	diagnostics["timestamp"] = time.Now().Format(time.RFC3339)
+	diagnostics["workspace"] = d.workspaceDir
+	diagnostics["used_query"] = query
+	diagnostics["query_filters"] = filters
+	diagnostics["query_timestamp"] = time.Now().Format(time.RFC3339)
+
+	if condition != nil {
+		diagnostics["open_beads_count"] = condition.OpenBeads
+		diagnostics["ready_candidates"] = condition.ReadyCandidates
+		diagnostics["excluded_beads"] = condition.ExcludedBeads
+		diagnostics["exclusion_reasons"] = condition.ExclusionReasons
+		diagnostics["stale_assignees"] = condition.StaleAssignees
+		diagnostics["closed_with_assignee"] = condition.ClosedWithAssignee
+		diagnostics["circular_deps"] = condition.CircularDeps
+		diagnostics["db_inconsistent"] = condition.DBInconsistent
+
+		// Add direct database query results
+		diagnostics["actual_open_count"] = condition.OpenBeads
+		diagnostics["actual_ready_count"] = condition.ReadyCandidates
+
+		// Add fallback analysis if available
+		if condition.FallbackAnalysis != nil {
+			diagnostics["fallback_analysis"] = condition.FallbackAnalysis
+		}
+
+		// Add corruption detections if available
+		if len(condition.CorruptionDetections) > 0 {
+			diagnostics["corruption_detections"] = condition.CorruptionDetections
+		}
+	}
+
+	return diagnostics
+}
+
 // listBeads lists beads with optional filters
 func (d *StarvationDetector) listBeads(filters ...string) ([]Bead, error) {
 	args := []string{"list", "--json"}
@@ -461,7 +588,7 @@ func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, erro
 			d.pluckRetryState.FirstFailure = time.Now()
 		}
 
-		// Log the failure
+		// Log the failure with comprehensive diagnostics
 		if d.auditLogger != nil {
 			event := map[string]interface{}{
 				"action":             "pluck_retry_attempt",
@@ -470,9 +597,30 @@ func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, erro
 				"ready_candidates":    len(beads),
 				"open_beads":          len(openBeads),
 				"timestamp":           time.Now().Format(time.RFC3339),
+				"used_query":          "bead list --ready",
+				"query_filters":       []string{"--ready"},
+				"actual_open_count":   len(openBeads),
+				"actual_ready_count":  len(beads),
 			}
 			_ = d.auditLogger.Log(event)
 		}
+
+		// Create comprehensive diagnostic log entry for the mismatch
+		mismatchDiagnostics := map[string]interface{}{
+			"timestamp":            time.Now().Format(time.RFC3339),
+			"workspace":            d.workspaceDir,
+			"action":               "pluck_mismatch_detected",
+			"attempt_number":       attempt + 1,
+			"consecutive_failures": d.pluckRetryState.ConsecutiveFailures,
+			"used_query":           "bead list --ready",
+			"query_filters":        []string{"--ready"},
+			"actual_open_count":    len(openBeads),
+			"actual_ready_count":   len(beads),
+			"open_beads_count":     len(openBeads),
+			"ready_candidates":     len(beads),
+			"query_timestamp":      time.Now().Format(time.RFC3339),
+		}
+		d.logStarvationDiagnostics(mismatchDiagnostics)
 
 		// Check escalation thresholds - only when open beads actually exist
 		openBeadsCount := len(openBeads)
