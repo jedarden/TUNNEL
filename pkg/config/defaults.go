@@ -43,7 +43,7 @@ func GetDefaultConfig() *Config {
 			},
 			"fido2": {
 				Enabled:    false,
-				Priority:   80,
+				Priority:   95,
 				AuthKeyRef: "",
 				ExtraArgs:  []string{},
 				Settings: map[string]string{

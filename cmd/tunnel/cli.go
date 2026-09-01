@@ -641,11 +641,13 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 
 	// Create API server with the in-memory copy of the persisted token
 	apiServer := api.NewServer(&api.ServerConfig{
-		Manager:   tunnelManager,
-		Registry:  tunnelReg,
-		Logger:    log.Default(),
-		DevMode:   false,
-		AuthToken: authToken,
+		Manager:         tunnelManager,
+		Registry:        tunnelReg,
+		Logger:          log.Default(),
+		DevMode:         false,
+		AuthToken:       authToken,
+		CredentialStore: credentialStore,
+		AppConfig:       appConfig,
 	})
 
 	// Create Fiber app

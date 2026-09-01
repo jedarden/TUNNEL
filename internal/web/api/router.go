@@ -60,4 +60,17 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	// System routes
 	system := api.Group("/system")
 	system.Get("/status", server.getSystemStatus)
+
+	// FIDO2 authentication routes (if available)
+	if fido2Handler := server.GetFIDO2Handler(); fido2Handler != nil {
+		fido2Handler.RegisterRoutes(api)
+	}
+}
+
+// SetupAuthRoutes configures authentication-related routes (TOTP, FIDO2, etc.)
+func SetupAuthRoutes(app *fiber.App, server *Server) {
+	// Note: This is a placeholder for future authentication route integration
+	// Authentication routes (TOTP, FIDO2, OAuth) would be registered here
+	// For now, these are handled as standalone modules that can be integrated
+	// as needed by applications using the TUNNEL API
 }
