@@ -133,6 +133,7 @@ attempt_doctor_repair() {
 
     if [ "$DRY_RUN" = true ]; then
         log_info "[DRY RUN] Would run: bead doctor --repair"
+        log_info "[DRY RUN] Would run: bead sync flush-only"
         return 0
     fi
 
@@ -146,10 +147,21 @@ attempt_doctor_repair() {
     if bead doctor --repair > "$repair_output_file" 2>&1; then
         log_repair "✓ Bead doctor auto-repair completed"
         cat "$repair_output_file" >> "$LOG_FILE"
-        return 0
     else
         log_warn "✗ Bead doctor auto-repair had issues (continuing to manual checks)"
         cat "$repair_output_file" >> "$LOG_FILE"
+    fi
+
+    # Flush checkpoint to ensure it's current after repair
+    log_info "Flushing checkpoint to ensure consistency"
+    local sync_output_file="${LOG_DIR}/sync-flush-${TIMESTAMP}.txt"
+    if bead sync flush-only > "$sync_output_file" 2>&1; then
+        log_repair "✓ Checkpoint flushed successfully"
+        cat "$sync_output_file" >> "$LOG_FILE"
+        return 0
+    else
+        log_warn "✗ Checkpoint flush had issues (continuing to manual checks)"
+        cat "$sync_output_file" >> "$LOG_FILE"
         return 1
     fi
 }
