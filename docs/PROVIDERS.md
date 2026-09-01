@@ -230,6 +230,65 @@ cargo install bore-cli
 provider.Connect()
 ```
 
+### SSH Providers
+
+#### VS Code Tunnels
+
+**Location**: `/home/coding/TUNNEL/internal/providers/vscodetunnel/vscodetunnel.go`
+
+**Features**:
+- Remote development through VS Code
+- No open ports required
+- Secure tunnel through VS Code's relay service
+- Works with any VS Code client
+
+**Configuration**:
+```go
+config := &ProviderConfig{
+    Name: "vscode-tunnel",
+    Extra: map[string]string{
+        "machineName": "my-dev-machine", // Optional: custom machine name
+    },
+}
+```
+
+**Usage**:
+```bash
+# Install VS Code CLI (code command)
+# Visit: https://code.visualstudio.com/docs/remote/tunnels
+
+# Start tunnel
+provider.Connect()
+
+# The tunnel will be accessible from:
+# - VS Code desktop (Remote-Tunnels: SSH to this machine)
+# - VS Code for the Web (vscode.dev tunnels)
+# - Any VS Code client where you're signed in
+
+# Stop tunnel
+provider.Disconnect()
+```
+
+**Connection Info**:
+```go
+info, _ := provider.GetConnectionInfo()
+fmt.Printf("Status: %s\n", info.Status) // "connected" or "disconnected"
+```
+
+**Health Check**:
+```go
+health, _ := provider.HealthCheck()
+if health.Healthy {
+    fmt.Printf("VS Code tunnel is active: %s\n", health.Message)
+}
+```
+
+**Notes**:
+- Requires VS Code CLI (`code` command) to be installed
+- Authentication handled by VS Code's built-in account system
+- Tunnel name defaults to hostname, can be customized via `machineName` config
+- Automatically routes through VS Code's relay service (tunnel.antlr.vscode.dev:443)
+
 ## Provider Registry
 
 The provider registry manages all available providers and is located at `/workspaces/ardenone-cluster/tunnel/internal/registry/registry.go`.
