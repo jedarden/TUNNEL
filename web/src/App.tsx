@@ -6,6 +6,7 @@ import { Providers } from './pages/Providers'
 import { Settings } from './pages/Settings'
 import {
   AUTH_REQUIRED_EVENT,
+  bootstrapAuthToken,
   clearAuthToken,
   getAuthToken,
   setAuthToken,
@@ -98,34 +99,31 @@ function AuthenticationPrompt({ onAuthenticated }: AuthenticationPromptProps) {
   )
 }
 
-type AuthState = 'checking' | 'required' | 'authenticated'
+type AuthState = 'bootstrapping' | 'checking' | 'required' | 'authenticated'
 
 function App() {
-  const [authState, setAuthState] = useState<AuthState>(() =>
-    getAuthToken() ? 'checking' : 'required'
-  )
+  const [authState, setAuthState] = useState<AuthState>('bootstrapping')
 
   useEffect(() => {
     let active = true
     const requireAuthentication = () => setAuthState('required')
     window.addEventListener(AUTH_REQUIRED_EVENT, requireAuthentication)
 
-    const token = getAuthToken()
-    if (token) {
-      verifyAuthToken(token)
-        .then((valid) => {
-          if (!active) return
-          if (valid) {
-            setAuthState('authenticated')
-          } else {
-            clearAuthToken()
-            setAuthState('required')
-          }
-        })
-        .catch(() => {
-          if (active) setAuthState('required')
-        })
-    }
+    // Try to bootstrap the token from the server first
+    bootstrapAuthToken()
+      .then((token) => {
+        if (!active) return
+        if (token) {
+          // Token bootstrapped successfully
+          setAuthState('authenticated')
+        } else {
+          // Bootstrap failed, fall back to manual prompt
+          setAuthState('required')
+        }
+      })
+      .catch(() => {
+        if (active) setAuthState('required')
+      })
 
     return () => {
       active = false
@@ -133,10 +131,10 @@ function App() {
     }
   }, [])
 
-  if (authState === 'checking') {
+  if (authState === 'bootstrapping') {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
-        Verifying API access…
+        Initializing secure connection…
       </main>
     )
   }

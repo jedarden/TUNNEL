@@ -9,8 +9,9 @@ func SetupRoutes(app *fiber.App, server *Server) {
 	// API group
 	api := app.Group("/api")
 
-	// Keep only the minimal system information probe public. Route order is
-	// significant in Fiber: this handler is registered before the group auth.
+	// Bootstrap and minimal system information probes are public. Route order is
+	// significant in Fiber: these handlers are registered before the group auth.
+	api.Get("/system/token", server.getSystemToken)
 	api.Get("/system/info", server.getSystemInfo)
 
 	// Every other /api route, including unmatched paths, fails closed.

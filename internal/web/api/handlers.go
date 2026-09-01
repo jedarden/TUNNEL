@@ -488,6 +488,18 @@ func (s *Server) exportMetrics(c *fiber.Ctx) error {
 
 // System handlers
 
+func (s *Server) getSystemToken(c *fiber.Ctx) error {
+	if s.config.AuthToken == "" {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "API authentication is not configured",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"token": s.config.AuthToken,
+	})
+}
+
 func (s *Server) getSystemInfo(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"version":     "1.0.0",

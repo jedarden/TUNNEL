@@ -11,31 +11,27 @@ import type {
  * API client configuration
  */
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
-const AUTH_TOKEN_STORAGE_KEY = 'tunnel_auth_token'
 
 export const AUTH_REQUIRED_EVENT = 'tunnel:auth-required'
 export const WEBSOCKET_AUTH_PROTOCOL = 'tunnel-auth'
 
 /**
- * Authentication token storage
+ * Authentication token storage (in-memory only)
  */
 let authToken: string | null = null
+let bootstrapPromise: Promise<string | null> | null = null
 
 /**
  * Set the authentication token
  */
 export function setAuthToken(token: string): void {
   authToken = token.trim()
-  sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, authToken)
 }
 
 /**
  * Get the current authentication token
  */
 export function getAuthToken(): string | null {
-  if (!authToken) {
-    authToken = sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
-  }
   return authToken
 }
 
@@ -44,9 +40,43 @@ export function getAuthToken(): string | null {
  */
 export function clearAuthToken(): void {
   authToken = null
-  sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
-  // Remove values written by pre-release builds that used persistent storage.
-  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+  bootstrapPromise = null
+}
+
+/**
+ * Bootstrap authentication token from the server
+ * Fetches the token from /api/system/token and stores it in memory
+ */
+export async function bootstrapAuthToken(): Promise<string | null> {
+  // Return cached promise if bootstrap is in progress
+  if (bootstrapPromise) {
+    return bootstrapPromise
+  }
+
+  bootstrapPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/system/token`)
+      if (!response.ok) {
+        console.error('Failed to bootstrap auth token:', response.status, response.statusText)
+        return null
+      }
+
+      const data = await response.json()
+      if (typeof data.token === 'string') {
+        authToken = data.token.trim()
+        console.log('Authentication token bootstrapped successfully')
+        return authToken
+      }
+
+      console.error('Invalid token response from server')
+      return null
+    } catch (error) {
+      console.error('Error bootstrapping auth token:', error)
+      return null
+    }
+  })()
+
+  return bootstrapPromise
 }
 
 /**
