@@ -9,6 +9,7 @@ import (
 	"github.com/jedarden/tunnel/internal/providers/bore"
 	"github.com/jedarden/tunnel/internal/providers/cloudflare"
 	"github.com/jedarden/tunnel/internal/providers/ngrok"
+	"github.com/jedarden/tunnel/internal/providers/oauth"
 	"github.com/jedarden/tunnel/internal/providers/reversessh"
 	"github.com/jedarden/tunnel/internal/providers/sshforward"
 	"github.com/jedarden/tunnel/internal/providers/tailscale"
@@ -49,6 +50,9 @@ func (r *Registry) registerDefaultProviders() {
 	r.Register(sshforward.New())
 	r.Register(reversessh.New())
 	r.Register(bastion.New())
+
+	// Direct authentication providers
+	r.Register(oauth.New(nil))
 }
 
 // Register adds a provider to the registry
