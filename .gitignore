@@ -46,3 +46,6 @@ tmp/
 web/node_modules/
 web/dist/
 internal/web/embed/dist/
+
+# NEEDLE execution traces are local diagnostics.
+**/.beads/traces/
