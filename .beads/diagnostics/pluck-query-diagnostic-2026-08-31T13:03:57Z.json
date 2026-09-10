@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-08-31T13:03:57Z",
+  "workspace": "/home/coding/TUNNEL",
+  "diagnostic_type": "pluck_query_eligibility",
+  "version": "1.0",
+  "summary": {
+    "total_beads": 449,
+    "open_beads": 2,
+    "ready_candidates": 2,
+    "missing_from_ready": 0,
+    "starvation_detected": false
+  },
+  "filter_analysis": {
+    "total_beads": 449,
+    "open_beads": 2,
+    "ready_candidates": 2,
+    "filters": [
+      {
+        "name": "status_check",
+        "description": "Status must be 'open'",
+        "excluded": 447
+      },
+      {
+        "name": "manual_block",
+        "description": "Must not be manually blocked",
+        "excluded": 0
+      },
+      {
+        "name": "assignee_check",
+        "description": "Must not have assignee",
+        "excluded": 0
+      },
+      {
+        "name": "dependency_check",
+        "description": "Must have no unresolved dependencies",
+        "excluded": 0
+      },
+      {
+        "name": "label_filter",
+        "description": "Must not have exclusion labels",
+        "excluded": 0
+      }
+    ]
+  },
+  "configuration_check": {
+    "needle_yaml": {
+      "exists": true,
+      "backend": "bead-rs",
+      "issues": []
+    },
+    "beads_backend": {
+      "exists": true,
+      "type": "bead-rs",
+      "issues": []
+    },
+    "checkpoint_fresh": true,
+    "issues": []
+  },
+  "bead_doctor_output": {
+    "status": "healthy",
+    "raw_output": "Running diagnostics with scopes: All\n\nOK workspace_config: Workspace config valid: UUID=3f70458d-efa7-cdf1-6f96-918910cce1e6, prefix=tunnel\nOK database_integrity: Database integrity check passed\nOK stale_in_progress: No non-leased in-progress beads have been inactive for more than 86400 seconds\nOK uuid_divergence: No UUID divergence detected\nOK checkpoint_freshness: Forensic checkpoint valid: gen=gen-16865e72b692d5af767c97478000478f, covered=1774, records=2224, hash=2e73a093 (age unknown)\nOK backup_generations: Sharded backup: 2 generations (latest: gen-16865e72b692d5af767c97478000478f, previous: gen-90766f30416f40b3082fd84718d17296), 2 objects\nOK schema_validity: Schema validity OK: 449 issues validated\nOK dependency_graph: Dependency graph OK: 25 dependencies, 10 blocked issues, no cycles\nOK ready_frontier: Ready frontier OK: no open issues are held by an assignee\nOK comments_integrity: Comments integrity OK: 2 comments validated\nOK temporary_files: No orphaned temporary files found\n\nScopes checked: store, backup, schema, dependencies, comments\nTimestamp: 2026-08-31T13:03:57Z\n",
+    "checks": [
+      "Running diagnostics with scopes: All",
+      "OK workspace_config: Workspace config valid: UUID=3f70458d-efa7-cdf1-6f96-918910cce1e6, prefix=tunnel",
+      "OK database_integrity: Database integrity check passed",
+      "OK stale_in_progress: No non-leased in-progress beads have been inactive for more than 86400 seconds",
+      "OK uuid_divergence: No UUID divergence detected",
+      "OK checkpoint_freshness: Forensic checkpoint valid: gen=gen-16865e72b692d5af767c97478000478f, covered=1774, records=2224, hash=2e73a093 (age unknown)",
+      "OK backup_generations: Sharded backup: 2 generations (latest: gen-16865e72b692d5af767c97478000478f, previous: gen-90766f30416f40b3082fd84718d17296), 2 objects",
+      "OK schema_validity: Schema validity OK: 449 issues validated",
+      "OK dependency_graph: Dependency graph OK: 25 dependencies, 10 blocked issues, no cycles",
+      "OK ready_frontier: Ready frontier OK: no open issues are held by an assignee",
+      "OK comments_integrity: Comments integrity OK: 2 comments validated",
+      "OK temporary_files: No orphaned temporary files found",
+      "Scopes checked: store, backup, schema, dependencies, comments",
+      "Timestamp: 2026-08-31T13:03:57Z",
+      "OK ",
+      "WARN ",
+      "ERROR "
+    ]
+  },
+  "issues_found": [],
+  "recommendations": [],
+  "auto_repair_log": [
+    "Skipped auto-repair: workspace healthy"
+  ]
+}
