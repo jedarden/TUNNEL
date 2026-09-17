@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -147,7 +148,18 @@ func initCLI() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to get home directory: %v\n", err)
 	} else {
-		authorizedKeysPath := filepath.Join(homeDir, ".ssh", "authorized_keys")
+		authorizedKeysPath := ""
+		if appConfig != nil {
+			authorizedKeysPath = appConfig.SSH.AuthorizedKeys
+		}
+		if authorizedKeysPath == "" {
+			authorizedKeysPath = filepath.Join(homeDir, ".ssh", "authorized_keys")
+		} else {
+			authorizedKeysPath = os.ExpandEnv(authorizedKeysPath)
+			if strings.HasPrefix(authorizedKeysPath, "~/") {
+				authorizedKeysPath = filepath.Join(homeDir, strings.TrimPrefix(authorizedKeysPath, "~/"))
+			}
+		}
 		keyManager, err = core.NewFileKeyManager(authorizedKeysPath, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to initialize key manager: %v\n", err)
@@ -374,14 +386,23 @@ var keysListCmd = &cobra.Command{
 }
 
 var keysAddCmd = &cobra.Command{
-	Use:   "add <user>",
+	Use:   "add [user]",
 	Short: "Add a new SSH key",
 	Long:  `Add a new SSH public key for a user. Prompts for the key interactively.`,
 	Example: `  tunnel keys add alice
-  tunnel keys add bob`,
-	Args: cobra.ExactArgs(1),
+	  tunnel keys add --user bob`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		user := args[0]
+		user := keysAddUser
+		if len(args) == 1 {
+			if user != "" && user != args[0] {
+				return fmt.Errorf("user specified both as an argument and with --user")
+			}
+			user = args[0]
+		}
+		if user == "" {
+			user = localKeyUser()
+		}
 		return addKey(user)
 	},
 }
@@ -404,18 +425,56 @@ var keysRotateCmd = &cobra.Command{
 }
 
 var keysRevokeCmd = &cobra.Command{
-	Use:   "revoke <user> <key-id>",
+	Use:   "revoke <key-id> [user]",
 	Short: "Revoke a specific SSH key",
 	Long:  `Revoke (remove) a specific SSH public key.`,
-	Example: `  tunnel keys revoke alice SHA256:abc123...
-  tunnel keys revoke bob 1`,
-	Args: cobra.ExactArgs(2),
+	Example: `  tunnel keys revoke SHA256:abc123... --user alice
+	  tunnel keys revoke 1`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		user := args[0]
-		keyID := args[1]
+		user := keysRevokeUser
+		keyID := args[0]
+		if len(args) == 2 {
+			// Keep accepting the original `revoke <user> <key-id>` form while
+			// the documented form is `revoke <key-id> [user]`.
+			if strings.HasPrefix(args[1], "SHA256:") || isListIndex(args[1]) {
+				if user != "" && user != args[0] {
+					return fmt.Errorf("user specified both as an argument and with --user")
+				}
+				user = args[0]
+				keyID = args[1]
+				return revokeKey(user, keyID)
+			}
+			if user != "" && user != args[1] {
+				return fmt.Errorf("user specified both as an argument and with --user")
+			}
+			user = args[1]
+		}
+		if user == "" {
+			user = localKeyUser()
+		}
 		return revokeKey(user, keyID)
 	},
 }
+
+var keysAddUser string
+var keysRevokeUser string
+
+var keysImportCmd = &cobra.Command{
+	Use:     "import",
+	Short:   "Import SSH keys from a remote profile",
+	Long:    `Import SSH public keys from a supported remote profile. Imported keys are validated and merged idempotently into authorized_keys.`,
+	Example: `  tunnel keys import --github octocat`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if keysImportGitHubUser == "" {
+			return fmt.Errorf("specify a source with --github <username>")
+		}
+		return importGitHubKeys(keysImportGitHubUser)
+	},
+}
+
+var keysImportGitHubUser string
 
 var keysImportGitHubCmd = &cobra.Command{
 	Use:   "import-github <github-user>",
@@ -444,12 +503,17 @@ var keysImportGitLabCmd = &cobra.Command{
 }
 
 func init() {
+	keysAddCmd.Flags().StringVar(&keysAddUser, "user", "", "user associated with the key (defaults to the current user)")
+	keysRevokeCmd.Flags().StringVar(&keysRevokeUser, "user", "", "user associated with the key (defaults to the current user)")
+	keysImportCmd.Flags().StringVar(&keysImportGitHubUser, "github", "", "GitHub username to import")
+
 	keysCmd.AddCommand(keysListCmd)
 	keysCmd.AddCommand(keysAddCmd)
 	keysCmd.AddCommand(keysRotateCmd)
 	keysCmd.AddCommand(keysRevokeCmd)
 	keysCmd.AddCommand(keysImportGitHubCmd)
 	keysCmd.AddCommand(keysImportGitLabCmd)
+	keysCmd.AddCommand(keysImportCmd)
 }
 
 // Completions command
@@ -1659,6 +1723,33 @@ func (p *providerAdapter) HealthCheck() (*providers.HealthStatus, error) {
 
 // Keys management functions
 
+func isListIndex(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func localKeyUser() string {
+	if username, err := os.UserHomeDir(); err == nil {
+		// The authorized_keys file managed by TUNNEL belongs to the local
+		// account. Use USER when available for audit labels and CLI output.
+		if currentUser := os.Getenv("USER"); currentUser != "" {
+			return currentUser
+		}
+		return filepath.Base(username)
+	}
+	if currentUser := os.Getenv("USER"); currentUser != "" {
+		return currentUser
+	}
+	return "current-user"
+}
+
 func listKeys(user string) error {
 	if keyManager == nil {
 		return fmt.Errorf("key manager not initialized")
@@ -1717,13 +1808,15 @@ func addKey(user string) error {
 		return fmt.Errorf("key manager not initialized")
 	}
 
-	color.Cyan("Add SSH Public Key for %s", user)
-	fmt.Println("Paste your SSH public key (press Enter when done):")
+	if !jsonOutput {
+		color.Cyan("Add SSH Public Key for %s", user)
+		fmt.Println("Paste your SSH public key (press Enter when done):")
+	}
 
 	// Read the key from stdin
 	reader := bufio.NewReader(os.Stdin)
 	keyStr, err := reader.ReadString('\n')
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return fmt.Errorf("failed to read key: %w", err)
 	}
 
@@ -1840,7 +1933,7 @@ func revokeKey(user, keyID string) error {
 		return fmt.Errorf("key manager not initialized")
 	}
 
-	if verbose {
+	if verbose && !jsonOutput {
 		fmt.Printf("Revoking key %s for user %s\n", keyID, user)
 	}
 
@@ -1879,7 +1972,9 @@ func importGitHubKeys(githubUser string) error {
 		return fmt.Errorf("key manager not initialized")
 	}
 
-	color.Cyan("Importing SSH keys from GitHub user: %s", githubUser)
+	if !jsonOutput {
+		color.Cyan("Importing SSH keys from GitHub user: %s", githubUser)
+	}
 
 	keys, err := keyManager.ImportFromGitHub(githubUser)
 	if err != nil {
@@ -1905,7 +2000,9 @@ func importGitHubKeys(githubUser string) error {
 	}
 
 	if len(keys) == 0 {
-		color.Yellow("No SSH keys found for GitHub user: %s", githubUser)
+		if !jsonOutput {
+			color.Yellow("No new SSH keys imported for GitHub user: %s", githubUser)
+		}
 		return nil
 	}
 
@@ -1929,7 +2026,9 @@ func importGitLabKeys(gitlabUser string) error {
 		return fmt.Errorf("key manager not initialized")
 	}
 
-	color.Cyan("Importing SSH keys from GitLab user: %s", gitlabUser)
+	if !jsonOutput {
+		color.Cyan("Importing SSH keys from GitLab user: %s", gitlabUser)
+	}
 
 	// GitLab API endpoint for user's SSH keys
 	url := fmt.Sprintf("https://gitlab.com/%s.keys", gitlabUser)
@@ -2008,7 +2107,9 @@ func importGitLabKeys(gitlabUser string) error {
 	}
 
 	if len(keys) == 0 {
-		color.Yellow("No SSH keys found for GitLab user: %s", gitlabUser)
+		if !jsonOutput {
+			color.Yellow("No new SSH keys imported for GitLab user: %s", gitlabUser)
+		}
 		return nil
 	}
 

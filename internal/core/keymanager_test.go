@@ -455,42 +455,91 @@ func TestListKeys(t *testing.T) {
 // TestImportFromGitHub tests GitHub key import with mock server
 func TestImportFromGitHub(t *testing.T) {
 	t.Run("Import from GitHub with mock server", func(t *testing.T) {
-		_, _, cleanup := setupTestKeyManager(t)
+		km, authorizedKeysPath, cleanup := setupTestKeyManager(t)
 		defer cleanup()
 
 		// Create mock HTTP server
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.URL.Path, ".keys") {
-				t.Errorf("Expected .keys endpoint, got %s", r.URL.Path)
+			if r.URL.Path != "/octocat.keys" {
+				t.Errorf("request path = %s, want /octocat.keys", r.URL.Path)
+			}
+			if r.Header.Get("Accept") != "text/plain" {
+				t.Errorf("Accept header = %q, want text/plain", r.Header.Get("Accept"))
 			}
 
 			// Return test keys
 			fmt.Fprintf(w, "%s\n%s\n", testED25519Key, testRSAKey)
 		}))
 		defer server.Close()
+		km.githubKeysURL = server.URL + "/%s.keys"
 
-		// Note: This test will use the actual GitHub URL, not the mock server
-		// For a real test, we would need to modify the ImportFromGitHub to accept a custom URL
-		// For now, we'll skip this test if network is unavailable
-		_ = server // Suppress unused warning
+		keys, err := km.ImportFromGitHub("octocat")
+		if err != nil {
+			t.Fatalf("ImportFromGitHub() error = %v", err)
+		}
+		if len(keys) != 2 {
+			t.Fatalf("ImportFromGitHub() returned %d keys, want 2", len(keys))
+		}
 
-		t.Skip("Skipping GitHub import test - requires network or code modification to inject mock URL")
+		stored, err := km.ListKeys("octocat")
+		if err != nil {
+			t.Fatalf("ListKeys() error = %v", err)
+		}
+		if len(stored) != 2 {
+			t.Fatalf("ListKeys() returned %d keys, want 2 after import", len(stored))
+		}
+		for _, key := range stored {
+			if key.Comment != "github.com/octocat" {
+				t.Errorf("imported key comment = %q, want github.com/octocat", key.Comment)
+			}
+		}
+
+		content, err := os.ReadFile(authorizedKeysPath)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		if !strings.Contains(string(content), "github.com/octocat") {
+			t.Error("authorized_keys does not contain the GitHub source comment")
+		}
+
+		// A second import is a no-op rather than a duplicate-key failure.
+		keys, err = km.ImportFromGitHub("octocat")
+		if err != nil {
+			t.Fatalf("second ImportFromGitHub() error = %v", err)
+		}
+		if len(keys) != 0 {
+			t.Errorf("second ImportFromGitHub() returned %d new keys, want 0", len(keys))
+		}
+		stored, _ = km.ListKeys("octocat")
+		if len(stored) != 2 {
+			t.Errorf("ListKeys() returned %d keys after duplicate import, want 2", len(stored))
+		}
+
 	})
 
-	t.Run("Import from GitHub - network error", func(t *testing.T) {
+	t.Run("Import from GitHub rejects an invalid response", func(t *testing.T) {
 		km, _, cleanup := setupTestKeyManager(t)
 		defer cleanup()
 
-		// Try to import from invalid username (will fail DNS/network)
-		_, err := km.ImportFromGitHub("invalid-user-that-does-not-exist-12345678")
-		if err == nil {
-			// If this succeeds, it means the user exists or we have network issues
-			t.Skip("Skipping test - unexpected success (network or user exists)")
-		}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, invalidKey)
+		}))
+		defer server.Close()
+		km.githubKeysURL = server.URL + "/%s.keys"
 
-		// Error is expected
-		if err == nil {
-			t.Error("ImportFromGitHub() expected error for invalid user")
+		_, err := km.ImportFromGitHub("octocat")
+		if err == nil || !strings.Contains(err.Error(), "no valid SSH keys") {
+			t.Fatalf("ImportFromGitHub() error = %v, want no-valid-keys error", err)
+		}
+	})
+
+	t.Run("Import from GitHub validates the username before fetching", func(t *testing.T) {
+		km, _, cleanup := setupTestKeyManager(t)
+		defer cleanup()
+
+		_, err := km.ImportFromGitHub("octocat/../other-user")
+		if err == nil || !strings.Contains(err.Error(), "invalid remote username") {
+			t.Fatalf("ImportFromGitHub() error = %v, want invalid username error", err)
 		}
 	})
 }
@@ -664,6 +713,65 @@ func TestAuthorizedKeysFileFormat(t *testing.T) {
 	// Check for the actual key
 	if !strings.Contains(contentStr, testED25519Key) {
 		t.Error("authorized_keys doesn't contain the added key")
+	}
+}
+
+func TestManualAddAndRevokeUpdateAuthorizedKeys(t *testing.T) {
+	km, authorizedKeysPath, cleanup := setupTestKeyManager(t)
+	defer cleanup()
+
+	first, err := km.ValidateKey(testED25519Key)
+	if err != nil {
+		t.Fatalf("ValidateKey() error = %v", err)
+	}
+	second, err := km.ValidateKey(testRSAKey)
+	if err != nil {
+		t.Fatalf("ValidateKey() error = %v", err)
+	}
+	if err := km.AddKey("alice", *first); err != nil {
+		t.Fatalf("AddKey(first) error = %v", err)
+	}
+	if err := km.AddKey("alice", *second); err != nil {
+		t.Fatalf("AddKey(second) error = %v", err)
+	}
+
+	info, err := os.Stat(authorizedKeysPath)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("authorized_keys permissions = %o, want 600", got)
+	}
+
+	content, err := os.ReadFile(authorizedKeysPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(content), first.PublicKey) || !strings.Contains(string(content), second.PublicKey) {
+		t.Fatal("authorized_keys did not contain both manually added keys")
+	}
+
+	if err := km.RemoveKey("alice", first.Fingerprint); err != nil {
+		t.Fatalf("RemoveKey() error = %v", err)
+	}
+	content, err = os.ReadFile(authorizedKeysPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after revoke error = %v", err)
+	}
+	if strings.Contains(string(content), first.PublicKey) {
+		t.Error("revoked key remains in authorized_keys")
+	}
+	if !strings.Contains(string(content), second.PublicKey) {
+		t.Error("unrevoked key was removed from authorized_keys")
+	}
+}
+
+func TestValidateKeyRejectsMultipleKeys(t *testing.T) {
+	km, _, cleanup := setupTestKeyManager(t)
+	defer cleanup()
+
+	if _, err := km.ValidateKey(testED25519Key + "\n" + testRSAKey); err == nil {
+		t.Error("ValidateKey() accepted multiple key lines")
 	}
 }
 

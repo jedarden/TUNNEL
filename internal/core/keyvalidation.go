@@ -187,15 +187,13 @@ func ValidateKeyFormat(keyStr string) error {
 		return fmt.Errorf("key is empty")
 	}
 
-	// Check for newlines within the key (except at the end)
-	if strings.Count(keyStr, "\n") > 1 {
-		return fmt.Errorf("key contains multiple newline characters")
-	}
-
 	// Parse to validate structure
-	_, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyStr))
+	_, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(keyStr))
 	if err != nil {
 		return fmt.Errorf("invalid key format: %w", err)
+	}
+	if strings.TrimSpace(string(rest)) != "" {
+		return fmt.Errorf("key contains more than one authorized key")
 	}
 
 	// Check key structure (should have at least 2 space-separated parts: type and key data)

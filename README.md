@@ -172,6 +172,49 @@ tunnel version             # show build version, commit, Go version
 tunnel completions bash    # generate shell completions (bash | zsh | fish)
 ```
 
+### SSH key workflows
+
+The key commands update the `ssh.authorized_keys` file from the configuration
+(the default is `~/.ssh/authorized_keys`). The file is created with mode
+`0600`, and each successful update replaces it atomically so a failed write
+cannot leave a partial authorization file behind.
+
+Import a GitHub user's public keys with validation and duplicate detection:
+
+```bash
+tunnel keys import --github octocat
+# The legacy equivalent is: tunnel keys import-github octocat
+```
+
+Only valid OpenSSH public-key lines are accepted. Import is idempotent: running
+it again does not add duplicate fingerprints. Imported entries are annotated
+with `github.com/<username>` in `authorized_keys`. A network failure, non-200
+response, or non-empty response containing no valid keys is reported as an
+error.
+
+Add a key manually by pasting one complete public-key line. The command accepts
+the documented flag form or a positional user name for compatibility:
+
+```bash
+tunnel keys add --user alice
+tunnel keys add alice
+```
+
+The key is parsed before it is written; empty input, multiple pasted keys, and
+malformed OpenSSH keys are rejected. List keys first to obtain a stable
+`SHA256:...` fingerprint, then revoke by fingerprint (or by its one-based list
+index):
+
+```bash
+tunnel keys list
+tunnel keys revoke SHA256:abc123... --user alice
+tunnel keys revoke 1
+```
+
+The original `tunnel keys revoke <user> <key-id>` form remains accepted. Every
+successful add, import, and revoke is also recorded in the configured audit
+log.
+
 ## Automatic failover
 
 TUNNEL runs multiple providers simultaneously. Each has a `priority` (lower = preferred). A background health checker (default interval: 10 s) measures latency and marks providers healthy or not. When the current primary fails `FailureThreshold` consecutive checks, TUNNEL promotes the next healthy provider. When the original comes back and passes `RecoveryThreshold` checks, it hands control back automatically if `auto_recover` is set.
