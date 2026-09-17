@@ -136,6 +136,12 @@ var (
 	defaultConfigPath = filepath.Join(os.Getenv("HOME"), ".config", "tunnel", "config.yaml")
 )
 
+// DefaultMetricsPort is the port the optional Prometheus metrics endpoint
+// binds when monitoring.metrics_port is unset (0) in the config file. The
+// endpoint itself is defined in internal/metrics; the contract lives in
+// docs/METRICS.md.
+const DefaultMetricsPort = 9090
+
 // Load loads configuration from the specified path
 func Load(path string) (*Config, error) {
 	if path == "" {
@@ -168,6 +174,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.filePath = path
+	applyMonitoringDefaults(&cfg)
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -175,6 +182,15 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// applyMonitoringDefaults fills in monitoring defaults for values the config
+// file left unset. The metrics port 0 means "not configured"; anything the
+// file does set must already be a usable port, which validateConfig enforces.
+func applyMonitoringDefaults(c *Config) {
+	if c.Monitoring.MetricsPort == 0 {
+		c.Monitoring.MetricsPort = DefaultMetricsPort
+	}
 }
 
 // validateConfig performs validation without locking
@@ -212,11 +228,12 @@ func validateConfig(c *Config) error {
 		return fmt.Errorf("invalid SSH port: %d", c.SSH.Port)
 	}
 
-	// Validate monitoring metrics port if enabled
-	if c.Monitoring.MetricsEnabled {
-		if c.Monitoring.MetricsPort < 1 || c.Monitoring.MetricsPort > 65535 {
-			return fmt.Errorf("invalid metrics port: %d", c.Monitoring.MetricsPort)
-		}
+	// Validate the metrics port whether or not the endpoint is enabled: a
+	// typo'd port is a config error regardless of the flag, and flipping
+	// metrics_enabled on later must not surface a port that can never bind.
+	// 0 means "unset" and falls back to DefaultMetricsPort in Load/Reload.
+	if c.Monitoring.MetricsPort < 0 || c.Monitoring.MetricsPort > 65535 {
+		return fmt.Errorf("invalid metrics port: %d", c.Monitoring.MetricsPort)
 	}
 
 	return nil
@@ -309,7 +326,8 @@ func (c *Config) Reload() error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
-	// Validate without locking (newCfg is a local variable)
+	// Normalize and validate without locking (newCfg is a local variable)
+	applyMonitoringDefaults(&newCfg)
 	if err := validateConfig(&newCfg); err != nil {
 		return fmt.Errorf("validate config: %w", err)
 	}

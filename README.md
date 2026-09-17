@@ -12,7 +12,7 @@ TUNNEL is a Go application that unifies multiple SSH tunnel and VPN providers be
 - **Encrypted credential storage** — system keyring by default, or AES-GCM encrypted files
 - **SSH key management** — import from GitHub, add manually, revoke
 - **Hot-swap binary** — file watcher detects a new binary and performs a graceful restart with no dropped connections
-- **Prometheus metrics** endpoint (optional, configurable port)
+- **Prometheus metrics** endpoint (optional, configurable port; see [docs/METRICS.md](docs/METRICS.md))
 
 ## Supported providers
 
@@ -132,8 +132,8 @@ ssh:
 monitoring:
   enabled: true
   audit_log: ~/.config/tunnel/audit.log
-  metrics_enabled: false
-  metrics_port: 9090
+  metrics_enabled: false    # Prometheus endpoint; serves 127.0.0.1:<metrics_port>/metrics when true
+  metrics_port: 9090        # must be 1-65535 when set; 0 falls back to 9090
 ```
 
 ## CLI reference
@@ -227,7 +227,11 @@ tunnel start tailscale,wireguard,ngrok --auto-failover
 tunnel status
 ```
 
-Failover events appear in the audit log and are emitted as Prometheus metrics when `metrics_enabled: true`.
+Failover events appear in the audit log. Connection metrics (state, bytes,
+latency, uptime per connection) are exported in Prometheus text format by the
+optional metrics endpoint when `metrics_enabled: true` — served on
+`http://127.0.0.1:<metrics_port>/metrics` (default port 9090, loopback only).
+See [docs/METRICS.md](docs/METRICS.md) for the full endpoint contract.
 
 ## Credential storage
 

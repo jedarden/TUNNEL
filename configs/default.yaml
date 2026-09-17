@@ -151,10 +151,16 @@ monitoring:
   # Syslog server (empty = local syslog)
   syslog_server: ""
 
-  # Enable Prometheus metrics endpoint
+  # Enable the Prometheus metrics endpoint (see docs/METRICS.md).
+  # When true, GET http://127.0.0.1:<metrics_port>/metrics serves connection
+  # metrics in Prometheus text format. The endpoint binds loopback only and
+  # is read once at startup; changes require restarting tunnel.
   metrics_enabled: false
 
-  # Metrics HTTP server port
+  # Metrics HTTP server port. Must be 1-65535 when set (validated at config
+  # load whether or not the endpoint is enabled); 0 means unset and falls
+  # back to 9090. A port already in use disables the endpoint with a warning
+  # at startup -- it never auto-increments.
   metrics_port: 9090
 
   # Metrics history retention period (e.g., 720h = 30 days, 168h = 7 days)

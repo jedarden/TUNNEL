@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -20,15 +19,15 @@ import (
 	"github.com/fatih/color"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
-	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jedarden/tunnel/internal/core"
+	"github.com/jedarden/tunnel/internal/metrics"
 	"github.com/jedarden/tunnel/internal/providers"
 	"github.com/jedarden/tunnel/internal/registry"
 	"github.com/jedarden/tunnel/internal/tui"
 	"github.com/jedarden/tunnel/internal/upgrade"
+	"github.com/jedarden/tunnel/internal/web"
 	"github.com/jedarden/tunnel/internal/web/api"
-	embeddedfs "github.com/jedarden/tunnel/internal/web/embed"
 	"github.com/jedarden/tunnel/internal/web/middleware"
 	"github.com/jedarden/tunnel/pkg/config"
 	"github.com/jedarden/tunnel/pkg/tunnel"
@@ -703,6 +702,22 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	tunnelReg = tunnel.NewRegistry()
 	tunnelManager = tunnel.NewManager(nil) // Use default config
 
+	// Optional Prometheus metrics endpoint (monitoring.metrics_enabled, off
+	// by default; contract and lifecycle in docs/METRICS.md). Metrics are an
+	// add-on: misconfiguration or a busy port logs a warning and the app
+	// runs on without the endpoint rather than taking the tunnels down.
+	metricsServer, err := metrics.NewAppServer(appConfig, Version, tunnelManager.GetMetrics, log.Default())
+	if err != nil {
+		log.Printf("Metrics endpoint disabled: %v", err)
+	} else if err := metricsServer.Start(ctx); err != nil {
+		log.Printf("Warning: metrics endpoint unavailable: %v", err)
+	} else if metricsServer.Enabled() {
+		defer metricsServer.Stop(context.Background())
+		if verbose {
+			fmt.Printf("Metrics endpoint on http://%s/metrics\n", metricsServer.Addr())
+		}
+	}
+
 	// Create API server with the in-memory copy of the persisted token
 	apiServer := api.NewServer(&api.ServerConfig{
 		Manager:         tunnelManager,
@@ -738,21 +753,12 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	// Setup API routes with authentication
 	api.SetupRoutes(app, apiServer)
 
-	// Serve embedded frontend
-	staticFS, err := embeddedfs.GetFS()
-	if err != nil {
+	// Serve embedded frontend (skipped when the binary was built without it)
+	if err := web.MountFrontend(app); err != nil {
 		// Frontend not embedded (development mode)
 		if verbose {
 			fmt.Println("Frontend not embedded, API-only mode")
 		}
-	} else {
-		// Serve static files from embedded filesystem
-		app.Use("/", filesystem.New(filesystem.Config{
-			Root:         http.FS(staticFS),
-			Browse:       false,
-			Index:        "index.html",
-			NotFoundFile: "index.html", // SPA fallback
-		}))
 	}
 
 	// Run server (blocks until shutdown)
@@ -764,11 +770,7 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	// Try to start server, auto-incrementing port if in use
 	actualPort := webPort
 	maxAttempts := 10
-	// Get host from config (default to 127.0.0.1 if not set)
-	host := viper.GetString("web.listen_address")
-	if host == "" {
-		host = "127.0.0.1"
-	}
+	host := resolveWebHost()
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		addr := fmt.Sprintf("%s:%d", host, actualPort)
@@ -803,14 +805,15 @@ func startWebServer(ctx context.Context, p *tea.Program) error {
 	return fmt.Errorf("could not find available port after %d attempts (tried %d-%d)", maxAttempts, webPort, actualPort-1)
 }
 
-// Fallback for when embedded filesystem doesn't exist (dev mode)
-func serveStaticFallback(app *fiber.App, staticFS fs.FS) {
-	app.Use("/", filesystem.New(filesystem.Config{
-		Root:         http.FS(staticFS),
-		Browse:       false,
-		Index:        "index.html",
-		NotFoundFile: "index.html",
-	}))
+// resolveWebHost returns the address the web UI binds to: the configured
+// web.listen_address (settable via --host, TUNNEL_WEB_LISTEN_ADDRESS or the
+// config file), defaulting to loopback only — the README documents the UI as
+// "served on localhost:8080", never on a routable interface.
+func resolveWebHost() string {
+	if host := viper.GetString("web.listen_address"); host != "" {
+		return host
+	}
+	return "127.0.0.1"
 }
 
 func startConnection(method string) error {

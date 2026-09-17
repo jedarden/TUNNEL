@@ -248,3 +248,127 @@ func TestMigrateConfig(t *testing.T) {
 		t.Errorf("Expected SSH port 2222, got %d", cfg.SSH.Port)
 	}
 }
+
+func TestMetricsPortValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		port      int
+		enabled   bool
+		expectErr bool
+	}{
+		{name: "default port, disabled", port: 9090, enabled: false, expectErr: false},
+		{name: "default port, enabled", port: 9090, enabled: true, expectErr: false},
+		{name: "high valid port, disabled", port: 65535, enabled: false, expectErr: false},
+		{name: "port 1, enabled", port: 1, enabled: true, expectErr: false},
+		// 0 means "unset" and is normalized to the default by Load/Reload;
+		// Validate itself accepts it as such.
+		{name: "unset port, disabled", port: 0, enabled: false, expectErr: false},
+		{name: "unset port, enabled", port: 0, enabled: true, expectErr: false},
+		{name: "negative port, disabled", port: -1, enabled: false, expectErr: true},
+		{name: "negative port, enabled", port: -1, enabled: true, expectErr: true},
+		{name: "port above range, disabled", port: 65536, enabled: false, expectErr: true},
+		{name: "port above range, enabled", port: 70000, enabled: true, expectErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := GetDefaultConfig()
+			cfg.Monitoring.MetricsPort = tt.port
+			cfg.Monitoring.MetricsEnabled = tt.enabled
+
+			err := cfg.Validate()
+			if (err != nil) != tt.expectErr {
+				t.Errorf("Validate() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+// TestMetricsPortDefaultAppliedOnLoad pins the endpoint's documented
+// defaulting: a config file that enables metrics without choosing a port
+// loads successfully and serves on DefaultMetricsPort.
+func TestMetricsPortDefaultAppliedOnLoad(t *testing.T) {
+	configYAML := `version: "1.0.0"
+settings:
+  log_level: info
+credentials:
+  store: keyring
+ssh:
+  port: 2222
+monitoring:
+  metrics_enabled: true
+`
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !cfg.Monitoring.MetricsEnabled {
+		t.Fatal("metrics_enabled did not load as true")
+	}
+	if got := cfg.Monitoring.MetricsPort; got != DefaultMetricsPort {
+		t.Errorf("MetricsPort = %d, want default %d", got, DefaultMetricsPort)
+	}
+}
+
+// TestMetricsPortInvalidRejectedOnLoad pins that a typo'd metrics port fails
+// config load even with the endpoint disabled, rather than resurfacing later
+// as an endpoint that can never bind.
+func TestMetricsPortInvalidRejectedOnLoad(t *testing.T) {
+	configYAML := `version: "1.0.0"
+settings:
+  log_level: info
+credentials:
+  store: keyring
+ssh:
+  port: 2222
+monitoring:
+  metrics_enabled: false
+  metrics_port: 70000
+`
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Error("Load accepted metrics_port 70000 with metrics disabled; want validation error")
+	}
+}
+
+// TestMetricsPortDefaultAppliedOnReload covers the reload path, which
+// validates incoming config without going through Load.
+func TestMetricsPortDefaultAppliedOnReload(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	enabledYAML := `version: "1.0.0"
+settings:
+  log_level: info
+credentials:
+  store: keyring
+ssh:
+  port: 2222
+monitoring:
+  metrics_enabled: true
+`
+	if err := os.WriteFile(configPath, []byte(enabledYAML), 0644); err != nil {
+		t.Fatalf("rewriting config: %v", err)
+	}
+
+	if err := cfg.Reload(); err != nil {
+		t.Fatalf("Reload failed: %v", err)
+	}
+	if got := cfg.Monitoring.MetricsPort; got != DefaultMetricsPort {
+		t.Errorf("MetricsPort after reload = %d, want default %d", got, DefaultMetricsPort)
+	}
+}
