@@ -156,7 +156,6 @@ tunnel status -v           # verbose (includes metrics)
 
 tunnel restart <provider>  # graceful stop + reconnect with state preservation
 
-tunnel configure <provider>  # interactive prompt for provider credentials
 tunnel auth set-key <provider>  # store an API key/token securely
 
 tunnel list                # list all providers and install status
@@ -211,9 +210,10 @@ tunnel keys revoke SHA256:abc123... --user alice
 tunnel keys revoke 1
 ```
 
-The original `tunnel keys revoke <user> <key-id>` form remains accepted. Every
-successful add, import, and revoke is also recorded in the configured audit
-log.
+The original `tunnel keys revoke <user> <key-id>` form remains accepted. Key
+operations (`key_added`, `keys_imported`, `key_removed`) are emitted to the
+audit log whenever the key manager is constructed with an audit logger;
+library callers can supply one via `core.NewFileKeyManager`.
 
 ## Automatic failover
 
@@ -240,8 +240,6 @@ Credentials are **never stored in `config.yaml`** in plaintext. The `auth_key_re
 ```bash
 # Store a credential interactively
 tunnel auth set-key cloudflare
-# or
-tunnel configure tailscale
 ```
 
 ## Architecture
@@ -250,8 +248,7 @@ tunnel configure tailscale
 tunnel (binary)
 ├── Web server (Fiber)           ← serves embedded React UI + REST/WebSocket API
 │   ├── /api/providers           ← list, connect, disconnect, health
-│   ├── /api/connections         ← active connections + metrics
-│   └── /api/keys                ← SSH key management
+│   └── /api/connections         ← active connections + metrics
 ├── Terminal UI (Bubbletea)      ← minimal status pane: server URL + controls
 ├── Connection Manager           ← tracks state for all active connections
 ├── Failover Manager             ← health polling + automatic promotion
