@@ -1,6 +1,10 @@
 package vscodetunnel
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +61,23 @@ func TestValidateConfig(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "provider name is required",
+		},
+		{
+			name: "wrong provider name",
+			config: &providers.ProviderConfig{
+				Name: "ssh-forward",
+			},
+			wantErr: true,
+			errMsg:  "provider name must be \"vscode-tunnel\"",
+		},
+		{
+			name: "invalid license setting",
+			config: &providers.ProviderConfig{
+				Name:  "vscode-tunnel",
+				Extra: map[string]string{"acceptLicense": "sometimes"},
+			},
+			wantErr: true,
+			errMsg:  "acceptLicense must be a boolean",
 		},
 		{
 			name: "valid config with name only",
@@ -278,6 +299,90 @@ func TestConfigure_Nil(t *testing.T) {
 	err := provider.Configure(nil)
 	if err == nil {
 		t.Error("Configure(nil) should return error")
+	}
+}
+
+func TestConfigureRejectsInvalidConfigWithoutApplyingIt(t *testing.T) {
+	provider := New()
+
+	err := provider.Configure(&providers.ProviderConfig{
+		Name: "ssh-forward",
+	})
+	if err == nil {
+		t.Fatal("Configure() accepted a config for a different provider")
+	}
+
+	config, err := provider.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() error = %v", err)
+	}
+	if config.Name != "vscode-tunnel" {
+		t.Fatalf("invalid config was applied: Name = %q", config.Name)
+	}
+
+	err = provider.Configure(&providers.ProviderConfig{
+		Name:  "vscode-tunnel",
+		Extra: map[string]string{"acceptLicense": "sometimes"},
+	})
+	if err == nil {
+		t.Fatal("Configure() accepted a non-boolean acceptLicense value")
+	}
+	config, err = provider.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() error = %v", err)
+	}
+	if config.Name != "vscode-tunnel" || len(config.Extra) != 0 {
+		t.Fatalf("invalid config was applied: %#v", config)
+	}
+}
+
+func TestMissingCodeExecutableIsReported(t *testing.T) {
+	previous := codeBinary
+	codeBinary = filepath.Join(t.TempDir(), "missing-code")
+	t.Cleanup(func() { codeBinary = previous })
+
+	provider := New()
+	if provider.IsInstalled() {
+		t.Fatal("IsInstalled() = true for a missing executable")
+	}
+	if err := provider.Connect(); !errors.Is(err, providers.ErrNotInstalled) {
+		t.Fatalf("Connect() error = %v, want ErrNotInstalled", err)
+	}
+
+	health, err := provider.HealthCheck()
+	if err != nil {
+		t.Fatalf("HealthCheck() error = %v", err)
+	}
+	if health.Status != "not_installed" || health.Healthy || !strings.Contains(health.Message, "VS Code CLI") {
+		t.Fatalf("HealthCheck() = %#v, want a clear not_installed status", health)
+	}
+}
+
+func TestCodeExecutableIsDetected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "code")
+	if err := os.WriteFile(path, []byte(`#!/bin/sh
+if [ "$1" = "--version" ]; then
+	echo 1.99.0
+	exit 0
+fi
+exit 0
+`), 0o700); err != nil {
+		t.Fatalf("write fake code executable: %v", err)
+	}
+	previous := codeBinary
+	codeBinary = path
+	t.Cleanup(func() { codeBinary = previous })
+
+	provider := New()
+	if !provider.IsInstalled() {
+		t.Fatal("IsInstalled() = false for a present code executable")
+	}
+	health, err := provider.HealthCheck()
+	if err != nil {
+		t.Fatalf("HealthCheck() error = %v", err)
+	}
+	if health.Status != "ready" || !strings.Contains(health.Message, "1.99.0") {
+		t.Fatalf("HealthCheck() = %#v, want ready status with CLI version", health)
 	}
 }
 

@@ -3,6 +3,7 @@ package vscodetunnel
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +85,9 @@ func (v *VSCodeTunnelProvider) Connect() error {
 	if err != nil {
 		return err
 	}
+	if err := v.ValidateConfig(config); err != nil {
+		return err
+	}
 
 	args := []string{"tunnel"}
 	if name := config.Extra["machineName"]; name != "" {
@@ -94,7 +98,11 @@ func (v *VSCodeTunnelProvider) Connect() error {
 	}
 	// Non-interactive runs require accepting the license terms; allow
 	// opting out for interactive first-run flows.
-	if config.Extra["acceptLicense"] != "false" {
+	acceptLicense := true
+	if configured := config.Extra["acceptLicense"]; configured != "" {
+		acceptLicense, _ = strconv.ParseBool(configured)
+	}
+	if acceptLicense {
 		args = append(args, "--accept-server-license-terms")
 	}
 
@@ -219,10 +227,28 @@ func (v *VSCodeTunnelProvider) GetLogs(since time.Time) ([]providers.LogEntry, e
 	return v.proc.Logs(since), nil
 }
 
+// Configure validates provider-specific options before storing them.
+func (v *VSCodeTunnelProvider) Configure(config *providers.ProviderConfig) error {
+	if err := v.ValidateConfig(config); err != nil {
+		return err
+	}
+	return v.BaseProvider.Configure(config)
+}
+
 // ValidateConfig validates VS Code tunnel-specific configuration
 func (v *VSCodeTunnelProvider) ValidateConfig(config *providers.ProviderConfig) error {
-	// machineName and provider are free-form strings passed through to the
-	// CLI, which is the authority on accepted values and surfaces bad ones
-	// through Connect.
-	return v.BaseProvider.ValidateConfig(config)
+	if err := v.BaseProvider.ValidateConfig(config); err != nil {
+		return err
+	}
+	if config.Name != v.Name() {
+		return fmt.Errorf("%w: provider name must be %q", providers.ErrInvalidConfig, v.Name())
+	}
+	if configured := config.Extra["acceptLicense"]; configured != "" {
+		if _, err := strconv.ParseBool(configured); err != nil {
+			return fmt.Errorf("%w: acceptLicense must be a boolean", providers.ErrInvalidConfig)
+		}
+	}
+	// machineName and provider are passed as individual CLI arguments; the
+	// code CLI remains the authority on which values it accepts.
+	return nil
 }

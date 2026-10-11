@@ -37,10 +37,12 @@ func TestSSHFamilyLifecycle(t *testing.T) {
 			config: &providers.ProviderConfig{
 				Name: "vscode-tunnel",
 				Extra: map[string]string{
-					"machineName": "integration-machine",
+					"machineName":   "integration-machine",
+					"provider":      "github",
+					"acceptLicense": "true",
 				},
 			},
-			wantArgs: "tunnel --name integration-machine --accept-server-license-terms",
+			wantArgs: "tunnel --name integration-machine --provider github --accept-server-license-terms",
 		},
 		{
 			name:     "ssh local forward",
@@ -109,6 +111,14 @@ func TestSSHFamilyLifecycle(t *testing.T) {
 			if info.ConnectedAt.IsZero() {
 				t.Error("ConnectedAt is zero for a live provider")
 			}
+			if tt.name == "vscode tunnel" {
+				if info.Extra["machine_name"] != "integration-machine" {
+					t.Errorf("machine_name = %v, want integration-machine", info.Extra["machine_name"])
+				}
+				if info.TunnelURL != "https://vscode.dev/tunnel/integration-machine" {
+					t.Errorf("TunnelURL = %q, want the configured VS Code tunnel URL", info.TunnelURL)
+				}
+			}
 
 			health, err := tt.provider.HealthCheck()
 			if err != nil {
@@ -135,6 +145,12 @@ func TestSSHFamilyLifecycle(t *testing.T) {
 			}
 			if !strings.Contains(logText.String(), tt.wantArgs) {
 				t.Errorf("captured logs = %q, want command arguments %q", logText.String(), tt.wantArgs)
+			}
+			if tt.name == "vscode tunnel" && !strings.Contains(logText.String(), "fake client started") {
+				t.Errorf("captured logs = %q, want fake CLI runtime output", logText.String())
+			}
+			if tt.name == "vscode tunnel" && !strings.Contains(logText.String(), "fake client runtime: tunnel active") {
+				t.Errorf("captured logs = %q, want ongoing fake CLI output", logText.String())
 			}
 
 			if err := tt.provider.Disconnect(); err != nil {
@@ -186,11 +202,62 @@ func TestSSHFamilyStartupFailureIsReported(t *testing.T) {
 	}
 }
 
+func TestVSCodeTunnelStartupFailureIsReported(t *testing.T) {
+	fakeBinDir := t.TempDir()
+	failingCode := filepath.Join(fakeBinDir, "code")
+	if err := os.WriteFile(failingCode, []byte("#!/bin/sh\nprintf 'authentication failed: account is not signed in\\n' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := vscodetunnel.New()
+	if err := provider.Configure(&providers.ProviderConfig{
+		Name: "vscode-tunnel",
+		Extra: map[string]string{
+			"machineName": "integration-machine",
+		},
+	}); err != nil {
+		t.Fatalf("Configure() error = %v", err)
+	}
+
+	err := provider.Connect()
+	if !errors.Is(err, providers.ErrConnectionFailed) {
+		t.Fatalf("Connect() error = %v, want ErrConnectionFailed", err)
+	}
+	if !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("Connect() error = %v, want startup diagnostic", err)
+	}
+	if provider.IsConnected() {
+		t.Fatal("IsConnected() = true after startup failure")
+	}
+
+	logs, err := provider.GetLogs(time.Now().Add(-time.Second))
+	if err != nil {
+		t.Fatalf("GetLogs() error = %v", err)
+	}
+	var foundFailure bool
+	for _, entry := range logs {
+		if strings.Contains(entry.Message, "authentication failed") && entry.Level == "Error" {
+			foundFailure = true
+			break
+		}
+	}
+	if !foundFailure {
+		t.Errorf("GetLogs() = %#v, want the actionable startup failure", logs)
+	}
+}
+
 func writeFakeClient(t *testing.T, path string) {
 	t.Helper()
 	const script = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+printf '1.99.0\n'
+exit 0
+fi
 printf 'fake client started: %s\n' "$*" >&2
 trap 'printf "fake client stopped\n" >&2; exit 0' INT TERM
+sleep 0.05
+printf 'fake client runtime: tunnel active\n' >&2
 while :; do sleep 0.05; done
 `
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
