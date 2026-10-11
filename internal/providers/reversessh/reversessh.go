@@ -4,30 +4,44 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jedarden/tunnel/internal/providers"
+	"github.com/jedarden/tunnel/internal/providers/procman"
 )
 
-// ReverseSSHProvider implements the Provider interface for reverse SSH tunnels
+// sshBinary is the client binary this provider wraps. It is a package
+// variable so tests can substitute a fake executable.
+var sshBinary = "ssh"
+
+// connectStabilizeTimeout bounds how long Connect watches the process for
+// immediate failure before reporting success.
+const connectStabilizeTimeout = 1500 * time.Millisecond
+
+// ReverseSSHProvider implements the Provider interface for reverse SSH
+// tunnels (ssh -N -R): it runs the system ssh client so a port on the relay
+// server forwards back to a service on this machine.
 type ReverseSSHProvider struct {
 	*providers.BaseProvider
-	cmd *exec.Cmd
+	proc *procman.Manager
 }
 
 // New creates a new Reverse SSH provider
 func New() *ReverseSSHProvider {
 	return &ReverseSSHProvider{
 		BaseProvider: providers.NewBaseProvider("reverse-ssh", providers.CategorySSH),
+		proc:         procman.New("reverse-ssh"),
 	}
 }
 
-// Install checks SSH client availability
+// Install explains how to install the OpenSSH client
 func (r *ReverseSSHProvider) Install() error {
 	if r.IsInstalled() {
 		return providers.ErrAlreadyInstalled
 	}
-	return fmt.Errorf("please install OpenSSH client: sudo apt install openssh-client")
+	return fmt.Errorf("please install the OpenSSH client: sudo apt install openssh-client")
 }
 
 // Uninstall is not applicable
@@ -35,89 +49,139 @@ func (r *ReverseSSHProvider) Uninstall() error {
 	return fmt.Errorf("SSH client is a system package; please manage it through your system's package manager")
 }
 
-// IsInstalled checks if SSH client is installed
+// IsInstalled reports whether the ssh client binary is on PATH
 func (r *ReverseSSHProvider) IsInstalled() bool {
-	cmd := exec.Command("which", "ssh")
-	err := cmd.Run()
+	_, err := exec.LookPath(sshBinary)
 	return err == nil
 }
 
-// Connect establishes a reverse SSH tunnel
+// reverseSpec captures the resolved parameters of one reverse tunnel.
+type reverseSpec struct {
+	relayServer   string
+	relayPort     int
+	relayUsername string
+	remotePort    int // port opened on the relay
+	targetHost    string
+	targetPort    int // local service the relay port forwards to
+	identity      string
+	hostKeys      string
+}
+
+func (r *ReverseSSHProvider) resolveSpec() (*reverseSpec, error) {
+	config, err := r.GetConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	// RemoteHost is accepted as an alias for Extra["relayServer"].
+	relayServer := config.Extra["relayServer"]
+	if relayServer == "" {
+		relayServer = config.RemoteHost
+	}
+	if relayServer == "" {
+		return nil, fmt.Errorf("%w: relay server is required for reverse-ssh", providers.ErrInvalidConfig)
+	}
+
+	spec := &reverseSpec{
+		relayServer:   relayServer,
+		relayPort:     22,
+		relayUsername: config.Extra["relayUsername"],
+		remotePort:    2222,
+		targetHost:    "localhost",
+		targetPort:    22,
+		identity:      config.Extra["identityFile"],
+		hostKeys:      config.Extra["strictHostKeyChecking"],
+	}
+
+	if p := config.Extra["relayPort"]; p != "" {
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("%w: invalid relay port %q", providers.ErrInvalidConfig, p)
+		}
+		spec.relayPort = port
+	}
+	if p := config.Extra["remotePort"]; p != "" {
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("%w: invalid remote port %q", providers.ErrInvalidConfig, p)
+		}
+		spec.remotePort = port
+	}
+	if h := config.Extra["targetHost"]; h != "" {
+		spec.targetHost = h
+	}
+	// LocalPort addresses the local service being exposed; it defaults
+	// to the conventional SSH port of this machine.
+	if config.LocalPort > 0 {
+		spec.targetPort = config.LocalPort
+	}
+
+	return spec, nil
+}
+
+// Connect establishes a reverse SSH tunnel to the relay server
 func (r *ReverseSSHProvider) Connect() error {
 	if !r.IsInstalled() {
 		return providers.ErrNotInstalled
 	}
 
-	config, err := r.GetConfig()
+	spec, err := r.resolveSpec()
 	if err != nil {
 		return err
 	}
 
-	// Get relay server details from config
-	relayServer := ""
-	relayPort := "22"
-	relayUser := ""
-	remotePort := "2222"
-
-	if config.Extra != nil {
-		if s, ok := config.Extra["relayServer"]; ok {
-			relayServer = s
-		}
-		if p, ok := config.Extra["relayPort"]; ok {
-			relayPort = p
-		}
-		if u, ok := config.Extra["relayUsername"]; ok {
-			relayUser = u
-		}
-		if rp, ok := config.Extra["remotePort"]; ok {
-			remotePort = rp
-		}
-	}
-
-	if relayServer == "" {
-		return fmt.Errorf("relay server is required")
-	}
-
-	// Build SSH command for reverse tunnel
-	// ssh -R remotePort:localhost:22 user@relay -p port -N
-	target := relayServer
-	if relayUser != "" {
-		target = relayUser + "@" + relayServer
-	}
-
 	args := []string{
-		"-R", fmt.Sprintf("%s:localhost:22", remotePort),
-		target,
-		"-p", relayPort,
 		"-N",
+		"-o", "ExitOnForwardFailure=yes",
 		"-o", "ServerAliveInterval=60",
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "ServerAliveCountMax=3",
+	}
+	if spec.hostKeys != "" {
+		args = append(args, "-o", "StrictHostKeyChecking="+spec.hostKeys)
+	} else {
+		args = append(args, "-o", "StrictHostKeyChecking=accept-new")
+	}
+	if spec.identity != "" {
+		args = append(args, "-i", spec.identity)
+	}
+	if spec.relayPort != 22 {
+		args = append(args, "-p", strconv.Itoa(spec.relayPort))
 	}
 
-	r.cmd = exec.Command("ssh", args...)
-	if err := r.cmd.Start(); err != nil {
-		return fmt.Errorf("%w: %v", providers.ErrConnectionFailed, err)
+	target := spec.relayServer
+	if spec.relayUsername != "" {
+		target = spec.relayUsername + "@" + spec.relayServer
+	}
+	args = append(args, "-R", fmt.Sprintf("%d:%s:%d", spec.remotePort, spec.targetHost, spec.targetPort), target)
+
+	if err := r.proc.Start(sshBinary, args); err != nil {
+		return err
 	}
 
+	// Surface immediate failures (auth, unreachable relay, relay refusing
+	// the remote bind) instead of reporting a dead tunnel as connected.
+	deadline := time.Now().Add(connectStabilizeTimeout)
+	for time.Now().Before(deadline) {
+		if !r.proc.Running() {
+			detail := strings.Join(r.proc.RecentErrors(3), "; ")
+			if detail == "" {
+				detail = "ssh exited during startup"
+			}
+			return fmt.Errorf("%w: %s", providers.ErrConnectionFailed, detail)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	return nil
 }
 
-// Disconnect terminates the reverse SSH tunnel
+// Disconnect terminates the reverse SSH tunnel process
 func (r *ReverseSSHProvider) Disconnect() error {
-	if r.cmd != nil && r.cmd.Process != nil {
-		return r.cmd.Process.Kill()
-	}
-	// Fallback: kill any reverse SSH tunnels
-	cmd := exec.Command("pkill", "-f", "ssh -R")
-	_ = cmd.Run()
-	return nil
+	return r.proc.Stop(2 * time.Second)
 }
 
-// IsConnected checks if reverse SSH tunnel is active
+// IsConnected reports whether the reverse tunnel ssh process is alive
 func (r *ReverseSSHProvider) IsConnected() bool {
-	cmd := exec.Command("pgrep", "-f", "ssh -R")
-	err := cmd.Run()
-	return err == nil
+	return r.proc.Running()
 }
 
 // GetConnectionInfo retrieves current connection information
@@ -127,15 +191,31 @@ func (r *ReverseSSHProvider) GetConnectionInfo() (*providers.ConnectionInfo, err
 		Extra:  make(map[string]interface{}),
 	}
 
-	if r.IsConnected() {
+	spec, err := r.resolveSpec()
+	if err != nil {
+		// No usable config yet: report bare disconnected state.
+		return info, nil
+	}
+
+	info.RemoteIP = spec.relayServer
+	info.Extra["type"] = "reverse-ssh-tunnel"
+	info.Extra["relay_server"] = spec.relayServer
+	info.Extra["relay_port"] = spec.relayPort
+	info.Extra["remote_port"] = spec.remotePort
+	info.Extra["target"] = fmt.Sprintf("%s:%d", spec.targetHost, spec.targetPort)
+
+	if r.proc.Running() {
 		info.Status = "connected"
-		info.Extra["type"] = "reverse-ssh-tunnel"
+		info.ConnectedAt = r.proc.StartedAt()
+		info.TunnelURL = fmt.Sprintf("%s:%d", spec.relayServer, spec.remotePort)
+		info.Extra["pid"] = r.proc.PID()
 	}
 
 	return info, nil
 }
 
-// HealthCheck performs a health check
+// HealthCheck reports provider health. The tunnel is healthy while its ssh
+// process lives; the local backing service is probed for reporting.
 func (r *ReverseSSHProvider) HealthCheck() (*providers.HealthStatus, error) {
 	start := time.Now()
 
@@ -143,26 +223,23 @@ func (r *ReverseSSHProvider) HealthCheck() (*providers.HealthStatus, error) {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "not_installed",
-			Message:   "SSH client is not installed",
+			Message:   "OpenSSH client is not installed",
 			LastCheck: time.Now(),
 			Latency:   time.Since(start),
 		}, nil
 	}
 
-	// Check if reverse SSH tunnel process is running
-	connected := r.IsConnected()
-	if !connected {
+	if !r.proc.Running() {
 		return &providers.HealthStatus{
 			Healthy:   false,
-			Status:    "disconnected",
-			Message:   "Reverse SSH tunnel is not active",
+			Status:    "ready",
+			Message:   "OpenSSH client available; no reverse tunnel active",
 			LastCheck: time.Now(),
 			Latency:   time.Since(start),
 		}, nil
 	}
 
-	// Verify actual SSH service reachability on the target port
-	config, err := r.GetConfig()
+	spec, err := r.resolveSpec()
 	if err != nil {
 		return &providers.HealthStatus{
 			Healthy:   false,
@@ -173,37 +250,61 @@ func (r *ReverseSSHProvider) HealthCheck() (*providers.HealthStatus, error) {
 		}, nil
 	}
 
-	// Get the local port being forwarded (default 22)
-	testPort := 22
-	if config.LocalPort > 0 {
-		testPort = config.LocalPort
-	}
+	message := fmt.Sprintf("Reverse tunnel %s:%d -> %s:%d is active",
+		spec.relayServer, spec.remotePort, spec.targetHost, spec.targetPort)
+	metrics := map[string]interface{}{"pid": r.proc.PID()}
 
-	// Test if the local SSH service is accessible through the tunnel
-	// by connecting to localhost:22 (or configured port)
-	timeout := 2 * time.Second
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
-	if err != nil {
-		return &providers.HealthStatus{
-			Healthy:   false,
-			Status:    "unreachable",
-			Message:   fmt.Sprintf("SSH service on port %d is not accessible through tunnel: %v", testPort, err),
-			LastCheck: time.Now(),
-			Latency:   time.Since(start),
-		}, nil
+	// When the exposed service is local, probe it so the report can say
+	// whether the far side would actually reach anything.
+	if host := spec.targetHost; host == "localhost" || net.ParseIP(host) != nil {
+		probeHost := host
+		if probeHost == "localhost" {
+			probeHost = "127.0.0.1"
+		}
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(probeHost, strconv.Itoa(spec.targetPort)), 250*time.Millisecond)
+		if err != nil {
+			metrics["target_service_reachable"] = false
+			message += " (warning: target service not reachable)"
+		} else {
+			conn.Close()
+			metrics["target_service_reachable"] = true
+			message += " (target service reachable)"
+		}
 	}
-	conn.Close()
 
 	return &providers.HealthStatus{
 		Healthy:   true,
 		Status:    "connected",
-		Message:   fmt.Sprintf("Reverse SSH tunnel is active and SSH service reachable on port %d", testPort),
+		Message:   message,
 		LastCheck: time.Now(),
 		Latency:   time.Since(start),
+		Metrics:   metrics,
 	}, nil
 }
 
-// GetLogs retrieves logs
+// GetLogs returns captured ssh client output since the given time
 func (r *ReverseSSHProvider) GetLogs(since time.Time) ([]providers.LogEntry, error) {
-	return []providers.LogEntry{}, nil
+	return r.proc.Logs(since), nil
+}
+
+// ValidateConfig validates reverse-ssh-specific configuration
+func (r *ReverseSSHProvider) ValidateConfig(config *providers.ProviderConfig) error {
+	if err := r.BaseProvider.ValidateConfig(config); err != nil {
+		return err
+	}
+	for key, value := range map[string]string{
+		"relayPort":  config.Extra["relayPort"],
+		"remotePort": config.Extra["remotePort"],
+	} {
+		if value == "" {
+			continue
+		}
+		if port, err := strconv.Atoi(value); err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("%w: invalid %s %q", providers.ErrInvalidConfig, key, value)
+		}
+	}
+	if config.LocalPort < 0 || config.LocalPort > 65535 {
+		return fmt.Errorf("%w: local port %d out of range", providers.ErrInvalidConfig, config.LocalPort)
+	}
+	return nil
 }

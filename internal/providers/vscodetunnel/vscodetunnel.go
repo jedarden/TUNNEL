@@ -2,49 +2,76 @@ package vscodetunnel
 
 import (
 	"fmt"
-	"net"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/jedarden/tunnel/internal/providers"
+	"github.com/jedarden/tunnel/internal/providers/procman"
 )
 
-// VSCodeTunnelProvider implements the Provider interface for VS Code Tunnels
+// codeBinary is the VS Code CLI this provider wraps. It is a package
+// variable so tests can substitute a fake executable.
+var codeBinary = "code"
+
+// connectStabilizeTimeout bounds how long Connect watches the process for
+// immediate failure before reporting success.
+const connectStabilizeTimeout = 1500 * time.Millisecond
+
+// relayHost is the VS Code tunnel relay service the CLI maintains the
+// tunnel through (informational reachability probe only).
+const relayHost = "global.rel.tunnels.api.visualstudio.com:443"
+
+// VSCodeTunnelProvider implements the Provider interface for VS Code
+// Tunnels: it runs `code tunnel` to expose this machine to VS Code clients
+// through Microsoft's relay service, reachable at
+// https://vscode.dev/tunnel/<machine>.
 type VSCodeTunnelProvider struct {
 	*providers.BaseProvider
+	proc *procman.Manager
 }
 
 // New creates a new VS Code Tunnel provider
 func New() *VSCodeTunnelProvider {
 	return &VSCodeTunnelProvider{
 		BaseProvider: providers.NewBaseProvider("vscode-tunnel", providers.CategorySSH),
+		proc:         procman.New("vscode-tunnel"),
 	}
 }
 
-// Install installs the VS Code CLI (code tunnel)
+// Install explains how to install the VS Code CLI
 func (v *VSCodeTunnelProvider) Install() error {
 	if v.IsInstalled() {
 		return providers.ErrAlreadyInstalled
 	}
-
-	// VS Code CLI is typically installed with VS Code or can be downloaded
-	return fmt.Errorf("please install VS Code CLI from https://code.visualstudio.com/docs/remote/tunnels")
+	return fmt.Errorf("please install the VS Code CLI from https://code.visualstudio.com/docs/remote/tunnels")
 }
 
-// Uninstall uninstalls VS Code tunnel
+// Uninstall explains that the CLI is uninstalled manually
 func (v *VSCodeTunnelProvider) Uninstall() error {
 	if !v.IsInstalled() {
 		return providers.ErrNotInstalled
 	}
-	return fmt.Errorf("please uninstall VS Code CLI manually")
+	return fmt.Errorf("please uninstall the VS Code CLI manually")
 }
 
-// IsInstalled checks if VS Code CLI is installed
+// IsInstalled reports whether the VS Code CLI is on PATH
 func (v *VSCodeTunnelProvider) IsInstalled() bool {
-	cmd := exec.Command("code", "tunnel", "--help")
-	err := cmd.Run()
+	_, err := exec.LookPath(codeBinary)
 	return err == nil
+}
+
+// cliVersion returns the first line of `code --version`, or "" on failure.
+func (v *VSCodeTunnelProvider) cliVersion() string {
+	path, err := exec.LookPath(codeBinary)
+	if err != nil {
+		return ""
+	}
+	output, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)[0]
 }
 
 // Connect starts a VS Code tunnel
@@ -59,37 +86,47 @@ func (v *VSCodeTunnelProvider) Connect() error {
 	}
 
 	args := []string{"tunnel"}
+	if name := config.Extra["machineName"]; name != "" {
+		args = append(args, "--name", name)
+	}
+	if provider := config.Extra["provider"]; provider != "" {
+		args = append(args, "--provider", provider)
+	}
+	// Non-interactive runs require accepting the license terms; allow
+	// opting out for interactive first-run flows.
+	if config.Extra["acceptLicense"] != "false" {
+		args = append(args, "--accept-server-license-terms")
+	}
 
-	// Add machine name if provided
-	if config.Extra != nil {
-		if name, ok := config.Extra["machineName"]; ok && name != "" {
-			args = append(args, "--name", name)
+	if err := v.proc.Start(codeBinary, args); err != nil {
+		return err
+	}
+
+	// Surface immediate failures (bad CLI install, rejected flags) instead
+	// of reporting a dead tunnel as connected. Interactive authentication
+	// prompts keep the process alive, so they pass this window.
+	deadline := time.Now().Add(connectStabilizeTimeout)
+	for time.Now().Before(deadline) {
+		if !v.proc.Running() {
+			detail := strings.Join(v.proc.RecentErrors(3), "; ")
+			if detail == "" {
+				detail = "code tunnel exited during startup"
+			}
+			return fmt.Errorf("%w: %s", providers.ErrConnectionFailed, detail)
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-
-	cmd := exec.Command("code", args...)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("%w: %v", providers.ErrConnectionFailed, err)
-	}
-
-	// Wait for tunnel to start
-	time.Sleep(5 * time.Second)
-
 	return nil
 }
 
-// Disconnect stops the VS Code tunnel
+// Disconnect stops this provider's tunnel process only
 func (v *VSCodeTunnelProvider) Disconnect() error {
-	cmd := exec.Command("pkill", "-f", "code tunnel")
-	_ = cmd.Run()
-	return nil
+	return v.proc.Stop(2 * time.Second)
 }
 
-// IsConnected checks if VS Code tunnel is running
+// IsConnected reports whether this provider's tunnel process is alive
 func (v *VSCodeTunnelProvider) IsConnected() bool {
-	cmd := exec.Command("pgrep", "-f", "code tunnel")
-	err := cmd.Run()
-	return err == nil
+	return v.proc.Running()
 }
 
 // GetConnectionInfo retrieves current connection information
@@ -99,15 +136,31 @@ func (v *VSCodeTunnelProvider) GetConnectionInfo() (*providers.ConnectionInfo, e
 		Extra:  make(map[string]interface{}),
 	}
 
-	if v.IsConnected() {
+	config, err := v.GetConfig()
+	if err != nil {
+		return nil, err
+	}
+	machineName := config.Extra["machineName"]
+
+	info.Extra["type"] = "vscode-tunnel"
+	if machineName != "" {
+		info.Extra["machine_name"] = machineName
+		// The documented web-client URL for a registered tunnel.
+		info.TunnelURL = fmt.Sprintf("https://vscode.dev/tunnel/%s", machineName)
+	}
+
+	if v.proc.Running() {
 		info.Status = "connected"
-		info.Extra["type"] = "vscode-tunnel"
+		info.ConnectedAt = v.proc.StartedAt()
+		info.Extra["pid"] = v.proc.PID()
 	}
 
 	return info, nil
 }
 
-// HealthCheck performs a health check
+// HealthCheck reports provider health: not_installed when the CLI is
+// missing, ready when installed with no tunnel, connected while the
+// tunnel process is alive.
 func (v *VSCodeTunnelProvider) HealthCheck() (*providers.HealthStatus, error) {
 	start := time.Now()
 
@@ -121,82 +174,34 @@ func (v *VSCodeTunnelProvider) HealthCheck() (*providers.HealthStatus, error) {
 		}, nil
 	}
 
-	// Check if code CLI works
-	cmd := exec.Command("code", "--version")
-	output, err := cmd.Output()
-
-	if err != nil {
+	if !v.proc.Running() {
+		message := "VS Code CLI available; tunnel is not active"
+		if version := v.cliVersion(); version != "" {
+			message = fmt.Sprintf("VS Code CLI available (version: %s); tunnel is not active", version)
+		}
 		return &providers.HealthStatus{
 			Healthy:   false,
-			Status:    "cli_error",
-			Message:   fmt.Sprintf("VS Code CLI error: %v", err),
+			Status:    "ready",
+			Message:   message,
 			LastCheck: time.Now(),
 			Latency:   time.Since(start),
 		}, nil
 	}
 
-	version := strings.TrimSpace(string(output))
-
-	// Check if tunnel process is running
-	connected := v.IsConnected()
-	if !connected {
-		return &providers.HealthStatus{
-			Healthy:   false,
-			Status:    "disconnected",
-			Message:   fmt.Sprintf("VS Code CLI available (version: %s) but tunnel is not active", strings.Split(version, "\n")[0]),
-			LastCheck: time.Now(),
-			Latency:   time.Since(start),
-		}, nil
-	}
-
-	// VS Code tunnels typically expose a local port, test connectivity to the service
-	// Default VS Code server port is usually dynamic, but we can test if any local port is accessible
 	config, err := v.GetConfig()
 	if err != nil {
 		return &providers.HealthStatus{
 			Healthy:   false,
-			Status:    "config_error",
+			Status:    "error",
 			Message:   fmt.Sprintf("Config error: %v", err),
 			LastCheck: time.Now(),
 			Latency:   time.Since(start),
 		}, nil
 	}
 
-	// Try to test connectivity to common VS Code tunnel ports if configured
-	testPort := config.LocalPort
-	if testPort > 0 {
-		timeout := 2 * time.Second
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", testPort), timeout)
-		if err != nil {
-			return &providers.HealthStatus{
-				Healthy:   false,
-				Status:    "unreachable",
-				Message:   fmt.Sprintf("VS Code tunnel service on port %d is not reachable: %v", testPort, err),
-				LastCheck: time.Now(),
-				Latency:   time.Since(start),
-			}, nil
-		}
-		conn.Close()
-	}
-
-	// If no specific port is configured, verify VS Code service connectivity
-	// by checking if the tunnel can reach VS Code's relay service
-	timeout := 3 * time.Second
-	conn, err := net.DialTimeout("tcp", "tunnel.antlr.vscode.dev:443", timeout)
-	if err != nil {
-		return &providers.HealthStatus{
-			Healthy:   false,
-			Status:    "relay_unreachable",
-			Message:   fmt.Sprintf("VS Code tunnel relay service is not reachable: %v", err),
-			LastCheck: time.Now(),
-			Latency:   time.Since(start),
-		}, nil
-	}
-	conn.Close()
-
-	message := fmt.Sprintf("VS Code tunnel is active (version: %s)", strings.Split(version, "\n")[0])
-	if testPort > 0 {
-		message += fmt.Sprintf(" with service reachable on port %d", testPort)
+	message := "VS Code tunnel is active"
+	if name := config.Extra["machineName"]; name != "" {
+		message = fmt.Sprintf("VS Code tunnel '%s' is active (via %s)", name, relayHost)
 	}
 
 	return &providers.HealthStatus{
@@ -205,10 +210,19 @@ func (v *VSCodeTunnelProvider) HealthCheck() (*providers.HealthStatus, error) {
 		Message:   message,
 		LastCheck: time.Now(),
 		Latency:   time.Since(start),
+		Metrics:   map[string]interface{}{"pid": v.proc.PID()},
 	}, nil
 }
 
-// GetLogs retrieves logs
+// GetLogs returns captured tunnel CLI output since the given time
 func (v *VSCodeTunnelProvider) GetLogs(since time.Time) ([]providers.LogEntry, error) {
-	return []providers.LogEntry{}, nil
+	return v.proc.Logs(since), nil
+}
+
+// ValidateConfig validates VS Code tunnel-specific configuration
+func (v *VSCodeTunnelProvider) ValidateConfig(config *providers.ProviderConfig) error {
+	// machineName and provider are free-form strings passed through to the
+	// CLI, which is the authority on accepted values and surfaces bad ones
+	// through Connect.
+	return v.BaseProvider.ValidateConfig(config)
 }

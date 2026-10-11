@@ -23,6 +23,10 @@ func TestNewRegistry(t *testing.T) {
 		"cloudflare",
 		"ngrok",
 		"bore",
+		"vscode-tunnel",
+		"ssh-forward",
+		"reverse-ssh",
+		"bastion",
 	}
 
 	for _, name := range expectedProviders {
@@ -58,6 +62,7 @@ func TestListByCategory(t *testing.T) {
 
 	vpnProviders := r.ListByCategory(providers.CategoryVPN)
 	tunnelProviders := r.ListByCategory(providers.CategoryTunnel)
+	sshProviders := r.ListByCategory(providers.CategorySSH)
 
 	if len(vpnProviders) == 0 {
 		t.Error("expected VPN providers to be registered")
@@ -65,6 +70,9 @@ func TestListByCategory(t *testing.T) {
 
 	if len(tunnelProviders) == 0 {
 		t.Error("expected Tunnel providers to be registered")
+	}
+	if len(sshProviders) != 4 {
+		t.Errorf("expected four SSH providers to be registered, got %d", len(sshProviders))
 	}
 
 	// Verify VPN providers
@@ -90,6 +98,18 @@ func TestListByCategory(t *testing.T) {
 	for _, provider := range tunnelProviders {
 		if !expectedTunnel[provider.Name()] {
 			t.Errorf("unexpected Tunnel provider: %s", provider.Name())
+		}
+	}
+
+	expectedSSH := map[string]bool{
+		"vscode-tunnel": true,
+		"ssh-forward":   true,
+		"reverse-ssh":   true,
+		"bastion":       true,
+	}
+	for _, provider := range sshProviders {
+		if !expectedSSH[provider.Name()] {
+			t.Errorf("unexpected SSH provider: %s", provider.Name())
 		}
 	}
 }

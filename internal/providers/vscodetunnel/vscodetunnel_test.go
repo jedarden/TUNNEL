@@ -68,7 +68,7 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "valid config with machine name",
 			config: &providers.ProviderConfig{
-				Name:  "vscode-tunnel",
+				Name: "vscode-tunnel",
 				Extra: map[string]string{
 					"machineName": "my-machine",
 				},
@@ -243,7 +243,7 @@ func TestConfigure(t *testing.T) {
 	provider := New()
 
 	config := &providers.ProviderConfig{
-		Name:  "vscode-tunnel",
+		Name: "vscode-tunnel",
 		Extra: map[string]string{
 			"machineName": "my-dev-machine",
 		},

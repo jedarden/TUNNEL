@@ -15,8 +15,11 @@ func TestNew(t *testing.T) {
 	if provider.BaseProvider == nil {
 		t.Fatal("BaseProvider is nil")
 	}
-	if provider.cmd != nil {
-		t.Error("cmd should be nil initially")
+	if provider.proc == nil {
+		t.Error("proc should not be nil")
+	}
+	if provider.IsConnected() {
+		t.Error("new provider should not be connected")
 	}
 }
 
@@ -71,7 +74,7 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "valid config with relay server",
 			config: &providers.ProviderConfig{
-				Name:  "reverse-ssh",
+				Name: "reverse-ssh",
 				Extra: map[string]string{
 					"relayServer": "relay.example.com",
 				},
@@ -81,12 +84,12 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "valid config with full relay settings",
 			config: &providers.ProviderConfig{
-				Name:  "reverse-ssh",
+				Name: "reverse-ssh",
 				Extra: map[string]string{
-					"relayServer":    "relay.example.com",
-					"relayPort":      "2222",
-					"relayUsername":  "tunneluser",
-					"remotePort":     "2223",
+					"relayServer":   "relay.example.com",
+					"relayPort":     "2222",
+					"relayUsername": "tunneluser",
+					"remotePort":    "2223",
 				},
 			},
 			wantErr: false,
@@ -248,7 +251,7 @@ func TestConfigure(t *testing.T) {
 	provider := New()
 
 	config := &providers.ProviderConfig{
-		Name:  "reverse-ssh",
+		Name: "reverse-ssh",
 		Extra: map[string]string{
 			"relayServer": "relay.example.com",
 			"relayPort":   "2222",
