@@ -7,8 +7,6 @@ import { Settings } from './pages/Settings'
 import {
   AUTH_REQUIRED_EVENT,
   bootstrapAuthToken,
-  clearAuthToken,
-  getAuthToken,
   setAuthToken,
   verifyAuthToken,
 } from './api/client'

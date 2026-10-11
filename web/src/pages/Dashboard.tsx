@@ -12,7 +12,7 @@ const Dashboard = () => {
   const [connections, setConnections] = useState<Connection[]>([])
 
   // Fetch real connections from API
-  const { data: connectionsData, isLoading: connectionsLoading, error: connectionsError } = useQuery({
+  const { isLoading: connectionsLoading, error: connectionsError } = useQuery({
     queryKey: ['connections'],
     queryFn: async () => {
       const data = await connectionsAPI.list()
