@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"bytes"
 	"embed"
 	"io/fs"
 )
@@ -24,4 +25,28 @@ func MustGetFS() fs.FS {
 		panic(err)
 	}
 	return fsys
+}
+
+// HasRealFrontend reports whether the embedded dist holds a real production
+// build of the React app rather than the placeholder page written by
+// `make build-dev`. A real Vite build always mounts the app at
+// <div id="root"> and references hashed assets under /assets/.
+func HasRealFrontend() bool {
+	index, err := fs.ReadFile(staticFS, "dist/index.html")
+	if err != nil {
+		return false
+	}
+	if !bytes.Contains(index, []byte(`id="root"`)) || !bytes.Contains(index, []byte("/assets/")) {
+		return false
+	}
+	assets, err := fs.ReadDir(staticFS, "dist/assets")
+	if err != nil {
+		return false
+	}
+	for _, asset := range assets {
+		if !asset.IsDir() {
+			return true
+		}
+	}
+	return false
 }

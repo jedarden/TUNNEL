@@ -31,6 +31,13 @@ INSTALL_DIR=$(HOME)/.local/bin
 WEB_DIR=./web
 EMBED_DIR=./internal/web/embed/dist
 
+# Placeholder page served by the development build when the React bundle has
+# not been embedded.
+# Byte-identical to the tracked internal/web/embed/dist/index.html so
+# build-dev and clean restore the same development page, and
+# `go:embed all:dist` always has a file to match in a fresh clone.
+PLACEHOLDER_INDEX='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>TUNNEL</title></head><body><main><h1>TUNNEL development mode</h1><p>The React UI is not embedded in this build. Run <code>make build</code> to embed it, or <code>make frontend-dev</code> to run the frontend separately.</p></main></body></html>'
+
 # Default target
 all: deps fmt vet build
 
@@ -48,16 +55,20 @@ help:
 build-frontend:
 	@echo "Building React frontend..."
 	@if [ -d "$(WEB_DIR)" ]; then \
-		cd $(WEB_DIR) && npm ci && npm run build && cd ..; \
-		echo "Copying dist to embed directory..."; \
-		rm -rf $(EMBED_DIR); \
-		mkdir -p $(EMBED_DIR); \
-		cp -r web/dist/. $(EMBED_DIR)/; \
+		(cd "$(WEB_DIR)" && npm ci && npm run build) && \
+		test -s "$(WEB_DIR)/dist/index.html" && \
+		echo "Copying dist to embed directory..." && \
+		tmp_dir="$(EMBED_DIR).tmp" && \
+		rm -rf "$$tmp_dir" && \
+		mkdir -p "$$tmp_dir" && \
+		cp -r "$(WEB_DIR)/dist/." "$$tmp_dir/" && \
+		rm -rf "$(EMBED_DIR)" && \
+		mv "$$tmp_dir" "$(EMBED_DIR)" && \
 		echo "Frontend built successfully"; \
 	else \
 		echo "Warning: $(WEB_DIR) directory not found, skipping frontend build"; \
-		mkdir -p $(EMBED_DIR); \
-		echo '<!DOCTYPE html><html><body><h1>Frontend not built</h1><p>Run make build-frontend first.</p></body></html>' > $(EMBED_DIR)/index.html; \
+		mkdir -p "$(EMBED_DIR)"; \
+		echo $(PLACEHOLDER_INDEX) > "$(EMBED_DIR)/index.html"; \
 	fi
 
 ## build: Build with embedded frontend (production)
@@ -71,7 +82,7 @@ build: deps build-frontend
 build-dev: deps
 	@echo "Building $(BINARY_NAME) (dev mode - no embedded frontend)..."
 	@mkdir -p $(EMBED_DIR)
-	@echo '<!DOCTYPE html><html><body><h1>Development Mode</h1><p>Frontend not embedded. Run make build-frontend first.</p></body></html>' > $(EMBED_DIR)/index.html
+	@echo $(PLACEHOLDER_INDEX) > $(EMBED_DIR)/index.html
 	@mkdir -p $(BIN_DIR)
 	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)
 	@echo "Built $(BIN_DIR)/$(BINARY_NAME) (dev mode)"
@@ -149,6 +160,8 @@ clean:
 	@echo "Cleaning..."
 	@rm -rf $(BIN_DIR)
 	@rm -rf $(EMBED_DIR)
+	@mkdir -p $(EMBED_DIR)
+	@echo $(PLACEHOLDER_INDEX) > $(EMBED_DIR)/index.html
 	@rm -rf $(WEB_DIR)/node_modules
 	@rm -rf $(WEB_DIR)/dist
 	@rm -f coverage.out coverage.html
