@@ -198,6 +198,9 @@ func (b *BastionProvider) GetConnectionInfo() (*providers.ConnectionInfo, error)
 	info.Extra["jump_port"] = spec.jumpPort
 	info.Extra["target_host"] = spec.target
 	info.Extra["target_port"] = spec.targetPort
+	// Keep the legacy summary field for callers that only need the target SSH
+	// port, while the detailed fields above describe the complete route.
+	info.Extra["port"] = spec.targetPort
 
 	if b.proc.Running() {
 		info.Status = "connected"

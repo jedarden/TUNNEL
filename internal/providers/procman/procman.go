@@ -72,7 +72,7 @@ func (m *Manager) Start(bin string, args []string) error {
 	}
 
 	m.bin = path
-	m.args = args
+	m.args = append([]string(nil), args...)
 	m.cmd = cmd
 	m.started = time.Now()
 	m.exited = false
@@ -169,6 +169,9 @@ func (m *Manager) Logs(since time.Time) []providers.LogEntry {
 // RecentErrors returns up to n error-level messages, most recent last.
 // Providers use it to give Connect failures actionable text.
 func (m *Manager) RecentErrors(n int) []string {
+	if n <= 0 {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -176,12 +179,12 @@ func (m *Manager) RecentErrors(n int) []string {
 	for _, entry := range m.logs {
 		if entry.Level == "Error" {
 			errs = append(errs, entry.Message)
-			if len(errs) >= n {
-				break
-			}
 		}
 	}
-	return errs
+	if len(errs) > n {
+		errs = errs[len(errs)-n:]
+	}
+	return append([]string(nil), errs...)
 }
 
 // Command returns a printable form of the managed command line.
