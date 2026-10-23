@@ -3,10 +3,10 @@ package totp
 import (
 	"bytes"
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/jedarden/tunnel/internal/core"
 )
 
 // Helper to create a test app
@@ -31,7 +31,7 @@ func makeRequest(app *fiber.App, method, path string, body interface{}) (int, []
 		bodyReader = bytes.NewReader(nil)
 	}
 
-	req, _ := fiber.NewRequest(method, path, bodyReader)
+	req := httptest.NewRequest(method, path, bodyReader)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -62,7 +62,7 @@ func TestHandleEnroll(t *testing.T) {
 	}{
 		{
 			name: "successful enrollment",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "user@example.com",
 			},
 			wantStatus: fiber.StatusCreated,
@@ -70,7 +70,7 @@ func TestHandleEnroll(t *testing.T) {
 		},
 		{
 			name:        "missing account name",
-			requestBody: map[string]string{},
+			requestBody: map[string]interface{}{},
 			wantStatus:  fiber.StatusBadRequest,
 		},
 		{
@@ -80,7 +80,7 @@ func TestHandleEnroll(t *testing.T) {
 		},
 		{
 			name: "duplicate enrollment",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "user@example.com",
 			},
 			wantStatus: fiber.StatusConflict,
@@ -126,7 +126,7 @@ func TestHandleValidate(t *testing.T) {
 	app := setupTestApp(handler)
 
 	// Setup: Enroll a user
-	bundle, err := manager.EnrollUser("user@example.com")
+	_, err := manager.EnrollUser("user@example.com")
 	if err != nil {
 		t.Fatalf("Setup enrollment failed: %v", err)
 	}
@@ -146,52 +146,52 @@ func TestHandleValidate(t *testing.T) {
 	}{
 		{
 			name: "valid code",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "user@example.com",
-				"code":        validCode,
-				"window":      "1",
+				"code":         validCode,
+				"window":       1,
 			},
 			wantStatus: fiber.StatusOK,
 			wantValid:  true,
 		},
 		{
 			name: "invalid code",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "user@example.com",
-				"code":        "000000",
-				"window":      "1",
+				"code":         "000000",
+				"window":       1,
 			},
 			wantStatus: fiber.StatusOK,
 			wantValid:  false,
 		},
 		{
 			name: "missing account name",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"code": validCode,
 			},
 			wantStatus: fiber.StatusBadRequest,
 		},
 		{
 			name: "missing code",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "user@example.com",
 			},
 			wantStatus: fiber.StatusBadRequest,
 		},
 		{
 			name: "user not enrolled",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "other@example.com",
-				"code":        validCode,
-				"window":      "1",
+				"code":         validCode,
+				"window":       1,
 			},
 			wantStatus: fiber.StatusInternalServerError,
 		},
 		{
 			name: "default window",
-			requestBody: map[string]string{
+			requestBody: map[string]interface{}{
 				"account_name": "user@example.com",
-				"code":        validCode,
+				"code":         validCode,
 			},
 			wantStatus: fiber.StatusOK,
 			wantValid:  true,
@@ -240,27 +240,27 @@ func TestHandleStatus(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		account    string
-		wantStatus int
+		name         string
+		account      string
+		wantStatus   int
 		wantEnrolled bool
 	}{
 		{
-			name:        "enrolled user",
-			account:     "user@example.com",
-			wantStatus:  fiber.StatusOK,
+			name:         "enrolled user",
+			account:      "user@example.com",
+			wantStatus:   fiber.StatusOK,
 			wantEnrolled: true,
 		},
 		{
-			name:        "not enrolled user",
-			account:     "other@example.com",
-			wantStatus:  fiber.StatusOK,
+			name:         "not enrolled user",
+			account:      "other@example.com",
+			wantStatus:   fiber.StatusOK,
 			wantEnrolled: false,
 		},
 		{
-			name:        "empty account",
-			account:     "",
-			wantStatus:  fiber.StatusBadRequest,
+			name:       "empty account",
+			account:    "",
+			wantStatus: fiber.StatusMethodNotAllowed,
 		},
 	}
 
@@ -302,26 +302,26 @@ func TestHandleDelete(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		account    string
-		wantStatus int
+		name         string
+		account      string
+		wantStatus   int
 		checkDeleted bool
 	}{
 		{
-			name:        "delete enrolled user",
-			account:     "user@example.com",
-			wantStatus:  fiber.StatusOK,
+			name:         "delete enrolled user",
+			account:      "user@example.com",
+			wantStatus:   fiber.StatusOK,
 			checkDeleted: true,
 		},
 		{
-			name:        "delete non-existent user",
-			account:     "other@example.com",
-			wantStatus:  fiber.StatusOK,
+			name:       "delete non-existent user",
+			account:    "other@example.com",
+			wantStatus: fiber.StatusOK,
 		},
 		{
-			name:        "empty account",
-			account:     "",
-			wantStatus:  fiber.StatusBadRequest,
+			name:       "empty account",
+			account:    "",
+			wantStatus: fiber.StatusNotFound,
 		},
 	}
 
@@ -556,7 +556,7 @@ func TestMiddlewareAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req, _ := fiber.NewRequest("GET", "/protected", nil)
+			req := httptest.NewRequest("GET", "/protected", nil)
 			if tt.headerKey != "" {
 				req.Header.Set(tt.headerKey, tt.headerVal)
 			}

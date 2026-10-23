@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"image/png"
 
 	"github.com/pquerna/otp"
 	"github.com/skip2/go-qrcode"
@@ -123,27 +122,27 @@ func (p *Provider) GenerateEnrollmentBundle(accountName string) (*EnrollmentBund
 	}
 
 	return &EnrollmentBundle{
-		Secret:   secret,
-		QRCode:   qrCode,
-		URL:      qrCode.URL,
-		Issuer:   p.issuer,
-		Account:  accountName,
-		Period:   30,     // 30 seconds
-		Digits:   6,      // 6 digits
+		Secret:    secret,
+		QRCode:    qrCode,
+		URL:       qrCode.URL,
+		Issuer:    p.issuer,
+		Account:   accountName,
+		Period:    30,     // 30 seconds
+		Digits:    6,      // 6 digits
 		Algorithm: "SHA1", // SHA1
 	}, nil
 }
 
 // EnrollmentBundle contains everything needed for TOTP enrollment
 type EnrollmentBundle struct {
-	Secret    string   `json:"secret"`             // Base32 encoded secret
-	QRCode    *QRCode  `json:"qr_code"`            // QR code data
-	URL       string   `json:"url"`                // otpauth:// URL
-	Issuer    string   `json:"issuer"`             // Issuer name
-	Account   string   `json:"account"`            // Account name
-	Period    int      `json:"period"`             // Time period in seconds
-	Digits    int      `json:"digits"`             // Number of digits
-	Algorithm string   `json:"algorithm"`          // Algorithm (SHA1, SHA256, etc.)
+	Secret    string   `json:"secret"`                 // Base32 encoded secret
+	QRCode    *QRCode  `json:"qr_code"`                // QR code data
+	URL       string   `json:"url"`                    // otpauth:// URL
+	Issuer    string   `json:"issuer"`                 // Issuer name
+	Account   string   `json:"account"`                // Account name
+	Period    int      `json:"period"`                 // Time period in seconds
+	Digits    int      `json:"digits"`                 // Number of digits
+	Algorithm string   `json:"algorithm"`              // Algorithm (SHA1, SHA256, etc.)
 	Backups   []string `json:"backup_codes,omitempty"` // Backup codes (optional)
 }
 

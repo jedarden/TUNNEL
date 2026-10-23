@@ -95,7 +95,7 @@ func TestManagerValidateCode(t *testing.T) {
 	accountName := "user@example.com"
 
 	// Enroll user first
-	bundle, err := manager.EnrollUser(accountName)
+	_, err := manager.EnrollUser(accountName)
 	if err != nil {
 		t.Fatalf("EnrollUser() error = %v", err)
 	}

@@ -42,14 +42,16 @@ func (p *Provider) GenerateCode(secret string) (string, error) {
 
 // ValidateCode validates a TOTP code against a secret
 func (p *Provider) ValidateCode(secret, code string) (bool, error) {
-	return totp.Validate(code, secret)
+	return totp.Validate(code, secret), nil
 }
 
 // ValidateCodeWithWindow validates a TOTP code with a custom time window
 func (p *Provider) ValidateCodeWithWindow(secret, code string, window int) (bool, error) {
 	opts := totp.ValidateOpts{
-		Period: uint(30), // 30 second period
-		Skew:   uint(window),
+		Period:    uint(30), // 30 second period
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+		Skew:      uint(window),
 	}
 	return totp.ValidateCustom(code, secret, time.Now(), opts)
 }
@@ -90,5 +92,5 @@ func (p *Provider) GetCurrentWindow(secret string) (int64, error) {
 		return 0, err
 	}
 
-	return totp.CodeCounter(key.Period(), time.Now()), nil
+	return time.Now().Unix() / int64(key.Period()), nil
 }

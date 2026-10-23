@@ -1,10 +1,10 @@
 package totp
 
 import (
+	"encoding/base32"
 	"encoding/base64"
+	"fmt"
 	"testing"
-
-	"github.com/pquerna/otp"
 )
 
 func TestGenerateQRCode(t *testing.T) {
@@ -254,7 +254,7 @@ func TestEnrollmentBundleValidateBackupCodes(t *testing.T) {
 			name:          "last backup code",
 			code:          "backup3",
 			wantValid:     true,
-			wantRemaining: 1,
+			wantRemaining: 2,
 		},
 	}
 

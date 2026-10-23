@@ -42,9 +42,9 @@ type EnrollmentResponse struct {
 
 // ValidationResponse represents a TOTP validation response
 type ValidationResponse struct {
-	Valid      bool   `json:"valid"`
-	Message     string `json:"message,omitempty"`
-	Remaining  int    `json:"remaining,omitempty"` // Seconds remaining in current window
+	Valid     bool   `json:"valid"`
+	Message   string `json:"message,omitempty"`
+	Remaining int    `json:"remaining,omitempty"` // Seconds remaining in current window
 }
 
 // StatusResponse represents TOTP status response

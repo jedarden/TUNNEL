@@ -171,7 +171,8 @@ func ExampleWithMiddleware() {
 	// 3. Custom account extraction
 	customExtractor := (&AccountExtractor{}).Custom(func(c *fiber.Ctx) string {
 		// Extract account from JWT token, session, etc.
-		return c.Locals("user_id")
+		id, _ := c.Locals("user_id").(string)
+		return id
 	})
 
 	apiGroup := app.Group("/api")

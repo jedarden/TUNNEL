@@ -1,6 +1,9 @@
 package totp
 
 import (
+	"encoding/base64"
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -237,7 +240,16 @@ func (ae *AccountExtractor) FromQuery(c *fiber.Ctx) string {
 
 // FromBasicAuth extracts account from Basic Auth username
 func (ae *AccountExtractor) FromBasicAuth(c *fiber.Ctx) string {
-	user, _, ok := c.BasicAuth()
+	const prefix = "Basic "
+	auth := c.Get("Authorization")
+	if len(auth) <= len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
+	if err != nil {
+		return ""
+	}
+	user, _, ok := strings.Cut(string(decoded), ":")
 	if !ok {
 		return ""
 	}

@@ -1,7 +1,7 @@
 package totp
 
 import (
-	"fmt"
+	"encoding/base32"
 	"testing"
 	"time"
 )
@@ -189,34 +189,34 @@ func TestTimeSyncCheck(t *testing.T) {
 	provider := NewProvider("test-issuer")
 
 	tests := []struct {
-		name         string
-		reference    time.Time
-		wantValid    bool
+		name      string
+		reference time.Time
+		wantValid bool
 	}{
 		{
-			name:         "current time",
-			reference:    time.Now(),
-			wantValid:    true,
+			name:      "current time",
+			reference: time.Now(),
+			wantValid: true,
 		},
 		{
-			name:         "time within window",
-			reference:    time.Now().Add(2 * time.Minute),
-			wantValid:    true,
+			name:      "time within window",
+			reference: time.Now().Add(2 * time.Minute),
+			wantValid: true,
 		},
 		{
-			name:         "time just within window",
-			reference:    time.Now().Add(4 * time.Minute + 59 * time.Second),
-			wantValid:    true,
+			name:      "time just within window",
+			reference: time.Now().Add(4*time.Minute + 59*time.Second),
+			wantValid: true,
 		},
 		{
-			name:         "time outside window future",
-			reference:    time.Now().Add(6 * time.Minute),
-			wantValid:    false,
+			name:      "time outside window future",
+			reference: time.Now().Add(6 * time.Minute),
+			wantValid: false,
 		},
 		{
-			name:         "time outside window past",
-			reference:    time.Now().Add(-6 * time.Minute),
-			wantValid:    false,
+			name:      "time outside window past",
+			reference: time.Now().Add(-6 * time.Minute),
+			wantValid: false,
 		},
 	}
 
@@ -258,7 +258,6 @@ func TestKnownTestVectors(t *testing.T) {
 	secret := "JBSWY3DPEHPK3PXP"
 
 	// Generate a code - should be consistent for same time window
-	now := time.Now()
 	code1, err := provider.GenerateCode(secret)
 	if err != nil {
 		t.Fatalf("GenerateCode() error = %v", err)
