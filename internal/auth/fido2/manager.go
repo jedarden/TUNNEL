@@ -3,6 +3,7 @@ package fido2
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -25,18 +26,24 @@ type Manager struct {
 }
 
 // StoredCredential represents a credential stored in the credential store
+// Sentinel errors returned by Manager so callers can map them to responses.
+var (
+	ErrUserNotFound       = errors.New("user not found")
+	ErrCredentialNotFound = errors.New("credential not found")
+)
+
 type StoredCredential struct {
-	ID           string              `json:"id"`
-	Type         string              `json:"type"`
-	Attestation  string              `json:"attestation_type"`
-	AAGUID       string              `json:"aaguid"`
-	SignCount    uint32              `json:"sign_count"`
-	PublicKey    string              `json:"public_key"`
-	Transport    []string            `json:"transport,omitempty"`
-	Flags        []string            `json:"flags,omitempty"`
-	RegisteredAt time.Time           `json:"registered_at"`
-	LastUsedAt   time.Time           `json:"last_used_at"`
-	Metadata     map[string]string   `json:"metadata,omitempty"`
+	ID           string            `json:"id"`
+	Type         string            `json:"type"`
+	Attestation  string            `json:"attestation_type"`
+	AAGUID       string            `json:"aaguid"`
+	SignCount    uint32            `json:"sign_count"`
+	PublicKey    string            `json:"public_key"`
+	Transport    []string          `json:"transport,omitempty"`
+	Flags        []string          `json:"flags,omitempty"`
+	RegisteredAt time.Time         `json:"registered_at"`
+	LastUsedAt   time.Time         `json:"last_used_at"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
 // StoredMetadata represents user metadata stored in the credential store
@@ -98,7 +105,7 @@ func (m *Manager) GetUser(accountName string) (*User, error) {
 	metadataBytes, err := m.store.Get(fido2Service, makeMetadataKey(accountName))
 	if err != nil {
 		if err == core.ErrCredentialNotFound {
-			return nil, fmt.Errorf("user not found")
+			return nil, ErrUserNotFound
 		}
 		return nil, fmt.Errorf("retrieve user metadata: %w", err)
 	}
@@ -198,7 +205,7 @@ func (m *Manager) UpdateCredential(accountName, credentialID string, updateFn fu
 	}
 
 	if !found {
-		return fmt.Errorf("credential not found")
+		return ErrCredentialNotFound
 	}
 
 	// Marshal and save
@@ -219,6 +226,9 @@ func (m *Manager) DeleteCredential(accountName, credentialID string) error {
 	// Load existing credentials
 	credsBytes, err := m.store.Get(fido2Service, makeCredKey(accountName))
 	if err != nil {
+		if err == core.ErrCredentialNotFound {
+			return ErrCredentialNotFound
+		}
 		return fmt.Errorf("retrieve credentials: %w", err)
 	}
 
@@ -228,7 +238,7 @@ func (m *Manager) DeleteCredential(accountName, credentialID string) error {
 	}
 
 	// Remove credential
-	newCreds := make([]StoredCredential, 0, len(creds)-1)
+	newCreds := make([]StoredCredential, 0, len(creds))
 	found := false
 	for _, cred := range creds {
 		if cred.ID != credentialID {
@@ -239,7 +249,7 @@ func (m *Manager) DeleteCredential(accountName, credentialID string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("credential not found")
+		return ErrCredentialNotFound
 	}
 
 	// If no credentials left, delete the key
@@ -315,7 +325,7 @@ func (m *Manager) GetUserCredentials(accountName string) (*UserCredentials, erro
 	metadataBytes, err := m.store.Get(fido2Service, makeMetadataKey(accountName))
 	if err != nil {
 		if err == core.ErrCredentialNotFound {
-			return nil, fmt.Errorf("user not found")
+			return nil, ErrUserNotFound
 		}
 		return nil, fmt.Errorf("retrieve metadata: %w", err)
 	}
@@ -401,14 +411,14 @@ func (m *Manager) FinishRegistration(accountName string, response *http.Request)
 
 	// Convert to stored credential
 	storedCred := &StoredCredential{
-		ID:        reg.ID,
-		Type:      reg.Type,
+		ID:          reg.ID,
+		Type:        reg.Type,
 		Attestation: reg.Attestation,
-		AAGUID:    reg.AAGUID,
-		PublicKey: reg.PublicKey,
-		SignCount: reg.SignCount,
-		Transport: reg.Transport,
-		Flags:     reg.Flags,
+		AAGUID:      reg.AAGUID,
+		PublicKey:   reg.PublicKey,
+		SignCount:   reg.SignCount,
+		Transport:   reg.Transport,
+		Flags:       reg.Flags,
 	}
 
 	if err := m.SaveCredential(accountName, storedCred); err != nil {
@@ -531,25 +541,31 @@ func splitKey(key string) []string {
 }
 
 func convertToWebAuthnCredential(cred StoredCredential) (*webauthn.Credential, error) {
-	// Decode AAGUID
+	id, err := base64.RawURLEncoding.DecodeString(cred.ID)
+	if err != nil {
+		return nil, fmt.Errorf("decode credential id: %w", err)
+	}
+
 	aaguid, err := base64.RawURLEncoding.DecodeString(cred.AAGUID)
 	if err != nil {
 		return nil, fmt.Errorf("decode aaguid: %w", err)
 	}
 
-	// Decode public key
 	publicKey, err := base64.RawURLEncoding.DecodeString(cred.PublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("decode public key: %w", err)
 	}
 
+	transports := make([]protocol.AuthenticatorTransport, 0, len(cred.Transport))
+	for _, t := range cred.Transport {
+		transports = append(transports, protocol.AuthenticatorTransport(t))
+	}
+
 	return &webauthn.Credential{
-		ID:              cred.ID,
-		Type:            cred.Type,
-		AttestationType: cred.Attestation,
-		AAGUID:          aaguid,
+		ID:              id,
 		PublicKey:       publicKey,
-		Transport:       cred.SignCount,
+		AttestationType: cred.Attestation,
+		Transport:       transports,
 		Flags: webauthn.CredentialFlags{
 			UserPresent:    contains(cred.Flags, "userPresent"),
 			UserVerified:   contains(cred.Flags, "userVerified"),
@@ -558,8 +574,7 @@ func convertToWebAuthnCredential(cred StoredCredential) (*webauthn.Credential, e
 		},
 		Authenticator: webauthn.Authenticator{
 			AAGUID:    aaguid,
-			Attachment: "",
-			Transport:  cred.Transport,
+			SignCount: cred.SignCount,
 		},
 	}, nil
 }

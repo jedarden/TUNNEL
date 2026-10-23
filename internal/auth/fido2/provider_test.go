@@ -31,13 +31,13 @@ func TestNewProvider(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:   "default config",
-			config: DefaultProviderConfig(),
+			name:    "default config",
+			config:  DefaultProviderConfig(),
 			wantErr: false,
 		},
 		{
-			name:   "nil config uses defaults",
-			config: nil,
+			name:    "nil config uses defaults",
+			config:  nil,
 			wantErr: false,
 		},
 		{

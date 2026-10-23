@@ -1,14 +1,19 @@
 package fido2
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
+
+// ErrNoCredentials is returned when authentication is attempted for a user without credentials.
+var ErrNoCredentials = errors.New("user has no registered credentials")
 
 // Provider handles FIDO2/WebAuthn registration and authentication
 type Provider struct {
@@ -108,20 +113,20 @@ func NewUser(accountName string) *User {
 
 // RegistrationRequest represents a WebAuthn registration request
 type RegistrationRequest struct {
-	User              *User
-	Registration      *protocol.CredentialCreation
-	SessionData       *webauthn.SessionData
-	Challenge         string
-	JSON              string // Marshaled registration options for client
+	User         *User
+	Registration *protocol.CredentialCreation
+	SessionData  *webauthn.SessionData
+	Challenge    string
+	JSON         string // Marshaled registration options for client
 }
 
 // AuthenticationRequest represents a WebAuthn authentication request
 type AuthenticationRequest struct {
-	User              *User
-	Assertion         *protocol.CredentialAssertion
-	SessionData       *webauthn.SessionData
-	Challenge         string
-	JSON              string // Marshaled assertion options for client
+	User        *User
+	Assertion   *protocol.CredentialAssertion
+	SessionData *webauthn.SessionData
+	Challenge   string
+	JSON        string // Marshaled assertion options for client
 }
 
 // CredentialRegistration represents a completed credential registration
@@ -139,9 +144,9 @@ type CredentialRegistration struct {
 
 // CredentialAssertion represents a completed authentication assertion
 type CredentialAssertion struct {
-	ID        string
-	Type      string
-	SignCount uint32
+	ID         string
+	Type       string
+	SignCount  uint32
 	UserHandle string
 	Verified   bool
 }
@@ -157,7 +162,7 @@ func (p *Provider) BeginRegistration(user *User, authenticatorSelection protocol
 		webauthn.WithConveyancePreference(protocol.PreferNoAttestation),
 	}
 
-	sessionData, registration, err := p.webAuthn.BeginRegistration(user, options...)
+	registration, sessionData, err := p.webAuthn.BeginRegistration(user, options...)
 	if err != nil {
 		return nil, fmt.Errorf("begin registration: %w", err)
 	}
@@ -172,7 +177,7 @@ func (p *Provider) BeginRegistration(user *User, authenticatorSelection protocol
 		User:         user,
 		Registration: registration,
 		SessionData:  sessionData,
-		Challenge:    sessionData.Challenge.String(),
+		Challenge:    sessionData.Challenge,
 		JSON:         string(registrationData),
 	}, nil
 }
@@ -188,9 +193,9 @@ func (p *Provider) FinishRegistration(user *User, sessionData *webauthn.SessionD
 	user.Credentials = append(user.Credentials, *credential)
 
 	// Extract transport and flags
-	transports := []string{}
-	if credential.Authenticator.Transport != nil {
-		transports = credential.Authenticator.Transport
+	transports := make([]string, 0, len(credential.Transport))
+	for _, t := range credential.Transport {
+		transports = append(transports, string(t))
 	}
 
 	flags := []string{}
@@ -208,13 +213,13 @@ func (p *Provider) FinishRegistration(user *User, sessionData *webauthn.SessionD
 	}
 
 	return &CredentialRegistration{
-		ID:           credential.ID,
-		Type:         credential.Type,
+		ID:           base64.RawURLEncoding.EncodeToString(credential.ID),
+		Type:         string(protocol.PublicKeyCredentialType),
 		Attestation:  credential.AttestationType,
-		AAGUID:       base64.RawURLEncoding.EncodeToString(credential.AAGUID),
+		AAGUID:       base64.RawURLEncoding.EncodeToString(credential.Authenticator.AAGUID),
 		PublicKey:    base64.RawURLEncoding.EncodeToString(credential.PublicKey),
-		SignCount:    0,
-		CloneWarning: false,
+		SignCount:    credential.Authenticator.SignCount,
+		CloneWarning: credential.Authenticator.CloneWarning,
 		Transport:    transports,
 		Flags:        flags,
 	}, nil
@@ -223,10 +228,10 @@ func (p *Provider) FinishRegistration(user *User, sessionData *webauthn.SessionD
 // BeginAuthentication starts a new WebAuthn authentication ceremony
 func (p *Provider) BeginAuthentication(user *User) (*AuthenticationRequest, error) {
 	if len(user.Credentials) == 0 {
-		return nil, fmt.Errorf("user has no registered credentials")
+		return nil, ErrNoCredentials
 	}
 
-	sessionData, assertion, err := p.webAuthn.BeginLogin(user)
+	assertion, sessionData, err := p.webAuthn.BeginLogin(user)
 	if err != nil {
 		return nil, fmt.Errorf("begin login: %w", err)
 	}
@@ -238,11 +243,11 @@ func (p *Provider) BeginAuthentication(user *User) (*AuthenticationRequest, erro
 	}
 
 	return &AuthenticationRequest{
-		User:         user,
-		Assertion:    assertion,
-		SessionData:  sessionData,
-		Challenge:    sessionData.Challenge.String(),
-		JSON:         string(assertionData),
+		User:        user,
+		Assertion:   assertion,
+		SessionData: sessionData,
+		Challenge:   sessionData.Challenge,
+		JSON:        string(assertionData),
 	}, nil
 }
 
@@ -255,16 +260,17 @@ func (p *Provider) FinishAuthentication(user *User, sessionData *webauthn.Sessio
 
 	// Update user's credential sign count
 	for i, c := range user.Credentials {
-		if c.ID == credential.ID {
-			user.Credentials[i].Transport = credential.Transport
+		if bytes.Equal(c.ID, credential.ID) {
+			user.Credentials[i].Authenticator.SignCount = credential.Authenticator.SignCount
+			user.Credentials[i].Authenticator.CloneWarning = credential.Authenticator.CloneWarning
 			break
 		}
 	}
 
 	return &CredentialAssertion{
-		ID:         credential.ID,
-		Type:       credential.Type,
-		SignCount:  credential.Transport,
+		ID:         base64.RawURLEncoding.EncodeToString(credential.ID),
+		Type:       string(protocol.PublicKeyCredentialType),
+		SignCount:  credential.Authenticator.SignCount,
 		UserHandle: string(user.WebAuthnID()),
 		Verified:   true,
 	}, nil

@@ -7,53 +7,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/jedarden/tunnel/internal/core"
 )
-
-// mockCredentialStore implements core.CredentialStore for testing
-type mockCredentialStore struct {
-	data map[string]map[string][]byte
-}
-
-func newMockCredentialStore() *mockCredentialStore {
-	return &mockCredentialStore{
-		data: make(map[string]map[string][]byte),
-	}
-}
-
-func (m *mockCredentialStore) Get(service, key string) ([]byte, error) {
-	if serviceData, ok := m.data[service]; ok {
-		if value, ok := serviceData[key]; ok {
-			return value, nil
-		}
-	}
-	return nil, core.ErrCredentialNotFound
-}
-
-func (m *mockCredentialStore) Set(service, key string, value []byte) error {
-	if _, ok := m.data[service]; !ok {
-		m.data[service] = make(map[string][]byte)
-	}
-	m.data[service][key] = value
-	return nil
-}
-
-func (m *mockCredentialStore) Delete(service, key string) error {
-	if serviceData, ok := m.data[service]; ok {
-		delete(serviceData, key)
-	}
-	return nil
-}
-
-func (m *mockCredentialStore) List(service string) ([]string, error) {
-	var keys []string
-	if serviceData, ok := m.data[service]; ok {
-		for key := range serviceData {
-			keys = append(keys, key)
-		}
-	}
-	return keys, nil
-}
 
 func TestNewHandler(t *testing.T) {
 	store := newMockCredentialStore()
@@ -348,9 +302,12 @@ func TestHandler_MissingAccountParameter(t *testing.T) {
 				t.Fatalf("Failed to send request: %v", err)
 			}
 
-			// Should either be a 404 (route not found) or error response
-			if resp.StatusCode != fiber.StatusNotFound && resp.StatusCode != fiber.StatusBadRequest {
-				t.Errorf("Expected status 404 or 400 for missing account parameter, got %d", resp.StatusCode)
+			// 404 (no route) or 400 (empty parameter); 405 occurs when the
+			// trailing-slash path collides with the DELETE /:account route.
+			switch resp.StatusCode {
+			case fiber.StatusNotFound, fiber.StatusBadRequest, fiber.StatusMethodNotAllowed:
+			default:
+				t.Errorf("Expected status 404, 400 or 405 for missing account parameter, got %d", resp.StatusCode)
 			}
 		})
 	}

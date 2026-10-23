@@ -1,7 +1,10 @@
 package fido2
 
 import (
+	"errors"
+
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
 )
 
 // Handler provides HTTP handlers for FIDO2 operations
@@ -44,25 +47,25 @@ type AuthenticationBeginResponse struct {
 
 // CredentialResponse represents a stored credential response
 type CredentialResponse struct {
-	ID            string              `json:"id"`
-	Type          string              `json:"type"`
-	Attestation   string              `json:"attestation_type"`
-	AAGUID        string              `json:"aaguid"`
-	SignCount     uint32              `json:"sign_count"`
-	PublicKey     string              `json:"public_key"`
-	Transport     []string            `json:"transport,omitempty"`
-	Flags         []string            `json:"flags,omitempty"`
-	RegisteredAt  string              `json:"registered_at"`
-	LastUsedAt    string              `json:"last_used_at"`
-	Metadata      map[string]string   `json:"metadata,omitempty"`
+	ID           string            `json:"id"`
+	Type         string            `json:"type"`
+	Attestation  string            `json:"attestation_type"`
+	AAGUID       string            `json:"aaguid"`
+	SignCount    uint32            `json:"sign_count"`
+	PublicKey    string            `json:"public_key"`
+	Transport    []string          `json:"transport,omitempty"`
+	Flags        []string          `json:"flags,omitempty"`
+	RegisteredAt string            `json:"registered_at"`
+	LastUsedAt   string            `json:"last_used_at"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
 // UserCredentialsResponse represents user credentials response
 type UserCredentialsResponse struct {
-	Username    string              `json:"username"`
-	DisplayName string              `json:"display_name"`
-	UserID      string              `json:"user_id"`
-	CreatedAt   string              `json:"created_at"`
+	Username    string               `json:"username"`
+	DisplayName string               `json:"display_name"`
+	UserID      string               `json:"user_id"`
+	CreatedAt   string               `json:"created_at"`
 	Credentials []CredentialResponse `json:"credentials"`
 }
 
@@ -128,7 +131,7 @@ func (h *Handler) handleRegistrationBegin(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(RegistrationBeginResponse{
+	return c.Status(fiber.StatusCreated).JSON(RegistrationBeginResponse{
 		UserID:      string(regReq.User.WebAuthnID()),
 		Username:    regReq.User.WebAuthnName(),
 		DisplayName: regReq.User.WebAuthnDisplayName(),
@@ -147,7 +150,13 @@ func (h *Handler) handleRegistrationFinish(c *fiber.Ctx) error {
 	}
 
 	// Finish registration ceremony
-	cred, err := h.manager.FinishRegistration(accountName, c.Context().Request)
+	httpReq, convErr := adaptor.ConvertRequest(c, false)
+	if convErr != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request",
+		})
+	}
+	cred, err := h.manager.FinishRegistration(accountName, httpReq)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Failed to finish registration",
@@ -186,7 +195,7 @@ func (h *Handler) handleAuthenticationBegin(c *fiber.Ctx) error {
 	// Begin authentication ceremony
 	authReq, err := h.manager.BeginAuthentication(req.AccountName)
 	if err != nil {
-		if err.Error() == "user has no registered credentials" {
+		if errors.Is(err, ErrNoCredentials) || errors.Is(err, ErrUserNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"error": "No credentials registered for this user",
 			})
@@ -213,7 +222,13 @@ func (h *Handler) handleAuthenticationFinish(c *fiber.Ctx) error {
 	}
 
 	// Finish authentication ceremony
-	assertion, err := h.manager.FinishAuthentication(accountName, c.Context().Request)
+	httpReq, convErr := adaptor.ConvertRequest(c, false)
+	if convErr != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request",
+		})
+	}
+	assertion, err := h.manager.FinishAuthentication(accountName, httpReq)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"error": "Authentication failed",
@@ -240,7 +255,7 @@ func (h *Handler) handleGetCredentials(c *fiber.Ctx) error {
 
 	userCreds, err := h.manager.GetUserCredentials(account)
 	if err != nil {
-		if err.Error() == "user not found" {
+		if errors.Is(err, ErrUserNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"error": "User not found",
 			})
@@ -294,7 +309,7 @@ func (h *Handler) handleDeleteCredential(c *fiber.Ctx) error {
 	}
 
 	if err := h.manager.DeleteCredential(account, credentialID); err != nil {
-		if err.Error() == "credential not found" {
+		if errors.Is(err, ErrCredentialNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"error": "Credential not found",
 			})

@@ -335,21 +335,21 @@ func TestManager_DeleteCredential(t *testing.T) {
 
 	// Create test credentials
 	cred1 := &StoredCredential{
-		ID:         "cred-1",
-		Type:       "public-key",
+		ID:          "cred-1",
+		Type:        "public-key",
 		Attestation: "none",
-		AAGUID:     "12345678-1234-1234-1234-123456789abc",
-		PublicKey:  "base64encodedpublickey1",
-		SignCount:  0,
+		AAGUID:      "12345678-1234-1234-1234-123456789abc",
+		PublicKey:   "base64encodedpublickey1",
+		SignCount:   0,
 	}
 
 	cred2 := &StoredCredential{
-		ID:         "cred-2",
-		Type:       "public-key",
+		ID:          "cred-2",
+		Type:        "public-key",
 		Attestation: "none",
-		AAGUID:     "87654321-4321-4321-4321-cba987654321",
-		PublicKey:  "base64encodedpublickey2",
-		SignCount:  0,
+		AAGUID:      "87654321-4321-4321-4321-cba987654321",
+		PublicKey:   "base64encodedpublickey2",
+		SignCount:   0,
 	}
 
 	err = manager.SaveCredential(accountName, cred1)
