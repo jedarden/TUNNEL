@@ -96,6 +96,7 @@ func setDefaults() {
 	// Web server defaults
 	viper.SetDefault("web.port", 8080)
 	viper.SetDefault("web.listen_address", "127.0.0.1")
+	_ = viper.BindEnv("web.listen_address", "TUNNEL_WEB_LISTEN_ADDRESS")
 
 	// SSH defaults
 	viper.SetDefault("ssh.port", 22)

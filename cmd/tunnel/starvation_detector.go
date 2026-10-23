@@ -12,7 +12,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var starvationDetectorCmd = &cobra.Command{
@@ -33,15 +32,15 @@ execution suitable for cron/systemd timers.`,
 }
 
 var (
-	detectorCheckInterval   time.Duration
-	detectorAlertCooldown   time.Duration
-	detectorAutoRepair      bool
-	detectorDryRun         bool
-	detectorOutputJSON     bool
-	detectorScheduled      bool
-	detectorDaemonMode     bool
-	detectorWorkspace      string
-	detectorMaxRetries     int
+	detectorCheckInterval             time.Duration
+	detectorAlertCooldown             time.Duration
+	detectorAutoRepair                bool
+	detectorDryRun                    bool
+	detectorOutputJSON                bool
+	detectorScheduled                 bool
+	detectorDaemonMode                bool
+	detectorWorkspace                 string
+	detectorMaxRetries                int
 	detectorPluckMaxRetries           int
 	detectorPluckInitialDelay         time.Duration
 	detectorPluckValidationThreshold  int
@@ -112,19 +111,19 @@ func runStarvationDetector() error {
 
 	// Create detector
 	config := &core.DetectorConfig{
-		WorkspaceDir:               workspaceDir,
-		BinaryPath:                 "bead",
-		CheckInterval:              detectorCheckInterval,
-		AlertCooldown:              detectorAlertCooldown,
-		AutoRepairEnabled:          detectorAutoRepair,
-		DryRun:                     detectorDryRun,
-		AuditLogger:                auditLogger,
-		EventPublisher:             eventPublisher,
-		MaxRetries:                 detectorMaxRetries,
-		PluckMaxRetries:            detectorPluckMaxRetries,
-		PluckInitialDelay:          detectorPluckInitialDelay,
-		PluckValidationThreshold:   detectorPluckValidationThreshold,
-		PluckRemediationThreshold:  detectorPluckRemediationThreshold,
+		WorkspaceDir:              workspaceDir,
+		BinaryPath:                "bead",
+		CheckInterval:             detectorCheckInterval,
+		AlertCooldown:             detectorAlertCooldown,
+		AutoRepairEnabled:         detectorAutoRepair,
+		DryRun:                    detectorDryRun,
+		AuditLogger:               auditLogger,
+		EventPublisher:            eventPublisher,
+		MaxRetries:                detectorMaxRetries,
+		PluckMaxRetries:           detectorPluckMaxRetries,
+		PluckInitialDelay:         detectorPluckInitialDelay,
+		PluckValidationThreshold:  detectorPluckValidationThreshold,
+		PluckRemediationThreshold: detectorPluckRemediationThreshold,
 	}
 
 	detector := core.NewStarvationDetector(config)
@@ -246,23 +245,4 @@ func runInteractiveDetection(detector *core.StarvationDetector) error {
 	}
 
 	return nil
-}
-
-// GetWorkspace returns the detector's workspace directory
-func (d *core.StarvationDetector) GetWorkspace() string {
-	// This would need to be added to the starvation_detector.go
-	// For now, we'll use a workaround
-	return "current"
-}
-
-// GetCheckInterval returns the detector's check interval
-func (d *core.StarvationDetector) GetCheckInterval() time.Duration {
-	// This would need to be added to the starvation_detector.go
-	return 5 * time.Minute
-}
-
-// GetAlertCooldown returns the detector's alert cooldown
-func (d *core.StarvationDetector) GetAlertCooldown() time.Duration {
-	// This would need to be added to the starvation_detector.go
-	return 15 * time.Minute
 }

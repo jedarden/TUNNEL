@@ -24,17 +24,17 @@ const (
 
 // Bead represents a bead with its state
 type Bead struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Status      BeadState  `json:"status"`
-	Assignee    string     `json:"assignee,omitempty"`
-	Priority    int        `json:"priority"`
-	Revision    int        `json:"revision"`
-	Labels      []string   `json:"labels,omitempty"`
-	Blocks      []string   `json:"blocks,omitempty"`
-	BlockedBy   []string   `json:"blocked_by,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Status    BeadState `json:"status"`
+	Assignee  string    `json:"assignee,omitempty"`
+	Priority  int       `json:"priority"`
+	Revision  int       `json:"revision"`
+	Labels    []string  `json:"labels,omitempty"`
+	Blocks    []string  `json:"blocks,omitempty"`
+	BlockedBy []string  `json:"blocked_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ValidationResult represents the result of a validation check
@@ -48,20 +48,20 @@ type ValidationResult struct {
 
 // BeadValidator handles bead state consistency validation
 type BeadValidator struct {
-	workspaceDir    string
-	binaryPath      string
-	dryRun          bool
-	auditLogger     *AuditLogger
-	fixesApplied    int
-	mu              sync.Mutex
+	workspaceDir string
+	binaryPath   string
+	dryRun       bool
+	auditLogger  *AuditLogger
+	fixesApplied int
+	mu           sync.Mutex
 }
 
 // ValidatorConfig holds configuration for the validator
 type ValidatorConfig struct {
-	WorkspaceDir    string
-	BinaryPath      string // Path to bead binary (default: "bead")
-	DryRun          bool   // If true, don't actually fix issues
-	AuditLogger     *AuditLogger
+	WorkspaceDir string
+	BinaryPath   string // Path to bead binary (default: "bead")
+	DryRun       bool   // If true, don't actually fix issues
+	AuditLogger  *AuditLogger
 }
 
 // NewBeadValidator creates a new bead validator
@@ -984,15 +984,15 @@ func (v *BeadValidator) logAudit(action, target string, success bool, message st
 		return
 	}
 
-	event := map[string]interface{}{
-		"action":     action,
-		"target":     target,
-		"success":    success,
-		"message":    message,
-		"timestamp":  time.Now().Format(time.RFC3339),
-	}
-
-	_ = v.auditLogger.Log(event)
+	_ = v.auditLogger.Log(AuditEvent{
+		Timestamp: time.Now(),
+		EventType: action,
+		Details: map[string]interface{}{
+			"target":  target,
+			"message": message,
+		},
+		Success: success,
+	})
 }
 
 // GetFixesApplied returns the number of fixes applied
@@ -1124,7 +1124,7 @@ func (v *BeadValidator) RunScheduledValidation() (string, error) {
 
 // InteractiveReport presents validation results in a human-readable format
 func (v *BeadValidator) InteractiveReport(results []ValidationResult) error {
-	fmt.Println("\n=== Bead State Validation Results ===\n")
+	fmt.Print("\n=== Bead State Validation Results ===\n\n")
 
 	for _, result := range results {
 		status := "✓ PASS"

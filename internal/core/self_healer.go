@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +12,11 @@ import (
 
 // SelfHealer performs proactive maintenance to prevent bead starvation
 type SelfHealer struct {
-	workspaceDir      string
-	binaryPath        string
-	beadValidator     *BeadValidator
-	auditLogger       *AuditLogger
-	eventPublisher    *EventPublisher
+	workspaceDir   string
+	binaryPath     string
+	beadValidator  *BeadValidator
+	auditLogger    *AuditLogger
+	eventPublisher *EventPublisher
 
 	// Configuration
 	checkInterval     time.Duration
@@ -31,24 +29,24 @@ type SelfHealer struct {
 	checkpointSyncInterval time.Duration // Default: 24 hours
 
 	// State
-	running           bool
-	lastCheckTime     time.Time
+	running            bool
+	lastCheckTime      time.Time
 	lastCheckpointSync time.Time
-	mu                sync.RWMutex
+	mu                 sync.RWMutex
 
 	// Health tracking
-	healingHistory    []HealingEvent
-	maxHistorySize    int
+	healingHistory []HealingEvent
+	maxHistorySize int
 }
 
 // HealingEvent represents a single healing action
 type HealingEvent struct {
-	Timestamp    time.Time              `json:"timestamp"`
-	EventType    string                 `json:"event_type"`
-	Description  string                 `json:"description"`
-	Details      map[string]interface{} `json:"details"`
-	Success      bool                   `json:"success"`
-	Error        string                 `json:"error,omitempty"`
+	Timestamp   time.Time              `json:"timestamp"`
+	EventType   string                 `json:"event_type"`
+	Description string                 `json:"description"`
+	Details     map[string]interface{} `json:"details"`
+	Success     bool                   `json:"success"`
+	Error       string                 `json:"error,omitempty"`
 }
 
 // SelfHealerConfig holds configuration for the self-healer
@@ -276,13 +274,16 @@ func (h *SelfHealer) runHealingCycle() error {
 
 	// Publish summary event
 	if h.eventPublisher != nil {
-		event := map[string]interface{}{
-			"type":            "healing_cycle_completed",
-			"issues_detected": issuesDetected,
-			"issues_fixed":    issuesFixed,
-			"timestamp":       time.Now().Format(time.RFC3339),
-		}
-		_ = h.eventPublisher.Publish(event)
+		h.eventPublisher.Publish(&ConnectionEvent{
+			Type:      EventStateChange,
+			Timestamp: time.Now(),
+			Data: map[string]interface{}{
+				"type":            "healing_cycle_completed",
+				"issues_detected": issuesDetected,
+				"issues_fixed":    issuesFixed,
+			},
+			Message: "healing_cycle_completed",
+		})
 	}
 
 	return nil
@@ -507,31 +508,34 @@ func (h *SelfHealer) logEvent(eventType, description string, details map[string]
 
 	// Log to audit logger
 	if h.auditLogger != nil {
-		auditEvent := map[string]interface{}{
-			"action":      eventType,
-			"description": description,
-			"success":     success,
-			"timestamp":   event.Timestamp.Format(time.RFC3339),
-		}
+		auditDetails := make(map[string]interface{}, len(details)+1)
+		auditDetails["description"] = description
 		for k, v := range details {
-			auditEvent[k] = v
+			auditDetails[k] = v
 		}
-		_ = h.auditLogger.Log(auditEvent)
+		_ = h.auditLogger.Log(AuditEvent{
+			Timestamp: event.Timestamp,
+			EventType: eventType,
+			Details:   auditDetails,
+			Success:   success,
+		})
 	}
 
 	// Publish event
 	if h.eventPublisher != nil {
-		pubEvent := map[string]interface{}{
-			"type":        "self_healer_event",
-			"event_type":  eventType,
-			"description": description,
-			"success":     success,
-			"timestamp":   event.Timestamp.Format(time.RFC3339),
-		}
+		pubData := make(map[string]interface{}, len(details)+2)
+		pubData["event_type"] = eventType
+		pubData["description"] = description
 		for k, v := range details {
-			pubEvent[k] = v
+			pubData[k] = v
 		}
-		_ = h.eventPublisher.Publish(pubEvent)
+		h.eventPublisher.Publish(&ConnectionEvent{
+			Type:      EventStateChange,
+			Timestamp: event.Timestamp,
+			Data:      pubData,
+			Message:   eventType,
+			ConnID:    "self_healer",
+		})
 	}
 }
 

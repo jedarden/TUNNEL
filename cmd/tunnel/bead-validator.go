@@ -8,7 +8,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/jedarden/tunnel/internal/core"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var beadValidatorCmd = &cobra.Command{
@@ -35,11 +34,11 @@ Use --dry-run to preview changes without applying them.`,
 }
 
 var (
-	validatorDryRun      bool
-	validatorWorkspace   string
-	validatorFix         bool
-	validatorOutputJSON  bool
-	validatorScheduled   bool
+	validatorDryRun     bool
+	validatorWorkspace  string
+	validatorFix        bool
+	validatorOutputJSON bool
+	validatorScheduled  bool
 )
 
 func init() {
@@ -172,11 +171,11 @@ func runScheduledValidation(validator *core.BeadValidator) error {
 func outputJSON(results []core.ValidationResult) error {
 	// Output results as JSON
 	data := struct {
-		Results       []core.ValidationResult `json:"results"`
-		Total         int                     `json:"total"`
-		Passed        int                     `json:"passed"`
-		Failed        int                     `json:"failed"`
-		FixesApplied  int                     `json:"fixes_applied,omitempty"`
+		Results      []core.ValidationResult `json:"results"`
+		Total        int                     `json:"total"`
+		Passed       int                     `json:"passed"`
+		Failed       int                     `json:"failed"`
+		FixesApplied int                     `json:"fixes_applied,omitempty"`
 	}{
 		Results: results,
 		Total:   len(results),

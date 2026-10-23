@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,30 +13,30 @@ import (
 
 // CheckpointMetrics holds metrics about the bead checkpoint
 type CheckpointMetrics struct {
-	Timestamp        time.Time `json:"timestamp"`
-	DatabasePath      string    `json:"database_path"`
-	CheckpointDir     string    `json:"checkpoint_dir"`
-	DatabaseSize      int64     `json:"database_size_bytes"`
-	DatabaseIssueCount int      `json:"database_issue_count"`
-	ForensicSize      int64     `json:"forensic_size_bytes"`
-	ForensicLineCount int       `json:"forensic_line_count"`
-	ObjectsDirSize    int64     `json:"objects_dir_size_bytes"`
-	ObjectsFileCount  int       `json:"objects_file_count"`
-	TotalRecordCount  int       `json:"total_record_count"`
-	IsActiveRootSize  int64     `json:"is_active_root_size"`
-	EventCount        int       `json:"event_count"`
+	Timestamp          time.Time `json:"timestamp"`
+	DatabasePath       string    `json:"database_path"`
+	CheckpointDir      string    `json:"checkpoint_dir"`
+	DatabaseSize       int64     `json:"database_size_bytes"`
+	DatabaseIssueCount int       `json:"database_issue_count"`
+	ForensicSize       int64     `json:"forensic_size_bytes"`
+	ForensicLineCount  int       `json:"forensic_line_count"`
+	ObjectsDirSize     int64     `json:"objects_dir_size_bytes"`
+	ObjectsFileCount   int       `json:"objects_file_count"`
+	TotalRecordCount   int       `json:"total_record_count"`
+	IsActiveRootSize   int64     `json:"is_active_root_size"`
+	EventCount         int       `json:"event_count"`
 }
 
 // CheckpointThresholds defines alert thresholds for checkpoint metrics
 type CheckpointThresholds struct {
-	MaxDatabaseSize      int64         `json:"max_database_size_bytes"`       // Default: 100MB
-	MaxForensicSize      int64         `json:"max_forensic_size_bytes"`       // Default: 50MB
-	MaxObjectsDirSize    int64         `json:"max_objects_dir_size_bytes"`    // Default: 200MB
-	MaxIssueCount        int           `json:"max_issue_count"`               // Default: 1000
-	MaxForensicLineCount int           `json:"max_forensic_line_count"`       // Default: 10000
-	MaxTotalRecordCount  int           `json:"max_total_record_count"`        // Default: 5000
-	CheckInterval       time.Duration `json:"check_interval"`                 // Default: 5 minutes
-	AlertCooldown        time.Duration `json:"alert_cooldown"`                // Default: 1 hour
+	MaxDatabaseSize      int64         `json:"max_database_size_bytes"`    // Default: 100MB
+	MaxForensicSize      int64         `json:"max_forensic_size_bytes"`    // Default: 50MB
+	MaxObjectsDirSize    int64         `json:"max_objects_dir_size_bytes"` // Default: 200MB
+	MaxIssueCount        int           `json:"max_issue_count"`            // Default: 1000
+	MaxForensicLineCount int           `json:"max_forensic_line_count"`    // Default: 10000
+	MaxTotalRecordCount  int           `json:"max_total_record_count"`     // Default: 5000
+	CheckInterval        time.Duration `json:"check_interval"`             // Default: 5 minutes
+	AlertCooldown        time.Duration `json:"alert_cooldown"`             // Default: 1 hour
 }
 
 // DefaultCheckpointThresholds returns sensible default thresholds
@@ -54,31 +55,31 @@ func DefaultCheckpointThresholds() *CheckpointThresholds {
 
 // CheckpointAlert represents an alert triggered by threshold violation
 type CheckpointAlert struct {
-	Timestamp   time.Time `json:"timestamp"`
-	AlertType   string    `json:"alert_type"`
-	MetricName  string    `json:"metric_name"`
-	CurrentValue float64  `json:"current_value"`
-	Threshold   float64   `json:"threshold"`
-	Message     string    `json:"message"`
-	Severity    string    `json:"severity"` // "warning", "critical"
+	Timestamp    time.Time `json:"timestamp"`
+	AlertType    string    `json:"alert_type"`
+	MetricName   string    `json:"metric_name"`
+	CurrentValue float64   `json:"current_value"`
+	Threshold    float64   `json:"threshold"`
+	Message      string    `json:"message"`
+	Severity     string    `json:"severity"` // "warning", "critical"
 }
 
 // CheckpointMonitor monitors bead checkpoint metrics and generates alerts
 type CheckpointMonitor struct {
-	mu            sync.RWMutex
-	workspaceDir  string
-	thresholds    *CheckpointThresholds
+	mu             sync.RWMutex
+	workspaceDir   string
+	thresholds     *CheckpointThresholds
 	eventPublisher *EventPublisher
-	auditLogger   *AuditLogger
+	auditLogger    *AuditLogger
 
 	// Alert tracking
 	lastAlertTime map[string]time.Time // metric_name -> last alert time
 
 	// Control
-	ctx           context.Context
-	cancel        context.CancelFunc
-	running       bool
-	wg            sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	running bool
+	wg      sync.WaitGroup
 }
 
 // NewCheckpointMonitor creates a new checkpoint monitor
@@ -95,8 +96,8 @@ func NewCheckpointMonitor(workspaceDir string, thresholds *CheckpointThresholds,
 		eventPublisher: eventPublisher,
 		auditLogger:    auditLogger,
 		lastAlertTime:  make(map[string]time.Time),
-		ctx:           ctx,
-		cancel:        cancel,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -172,8 +173,8 @@ func (cm *CheckpointMonitor) collectMetrics() (*CheckpointMetrics, error) {
 	checkpointDir := filepath.Join(beadsDir, "checkpoint")
 
 	metrics := &CheckpointMetrics{
-		Timestamp:    time.Now(),
-		DatabasePath: filepath.Join(beadsDir, "beads.db"),
+		Timestamp:     time.Now(),
+		DatabasePath:  filepath.Join(beadsDir, "beads.db"),
 		CheckpointDir: checkpointDir,
 	}
 
@@ -186,9 +187,9 @@ func (cm *CheckpointMonitor) collectMetrics() (*CheckpointMetrics, error) {
 	currentJsonPath := filepath.Join(checkpointDir, "current.json")
 	if data, err := os.ReadFile(currentJsonPath); err == nil {
 		var checkpointData struct {
-			IssueCount       int    `json:"issue_count"`
-			TotalRecordCount int    `json:"total_record_count"`
-			EventCount       int    `json:"event_count"`
+			IssueCount       int `json:"issue_count"`
+			TotalRecordCount int `json:"total_record_count"`
+			EventCount       int `json:"event_count"`
 			ActiveRoot       struct {
 				Path string `json:"path"`
 			} `json:"active_root"`
@@ -247,12 +248,12 @@ func (cm *CheckpointMonitor) evaluateThresholds(metrics *CheckpointMetrics) []Ch
 	// Check database size
 	if metrics.DatabaseSize > cm.thresholds.MaxDatabaseSize {
 		alerts = append(alerts, CheckpointAlert{
-			Timestamp:     now,
-			AlertType:     "size_threshold_exceeded",
-			MetricName:    "database_size",
-			CurrentValue:  float64(metrics.DatabaseSize),
-			Threshold:     float64(cm.thresholds.MaxDatabaseSize),
-			Message:       fmt.Sprintf("Database size %.2f MB exceeds threshold %.2f MB",
+			Timestamp:    now,
+			AlertType:    "size_threshold_exceeded",
+			MetricName:   "database_size",
+			CurrentValue: float64(metrics.DatabaseSize),
+			Threshold:    float64(cm.thresholds.MaxDatabaseSize),
+			Message: fmt.Sprintf("Database size %.2f MB exceeds threshold %.2f MB",
 				float64(metrics.DatabaseSize)/(1024*1024), float64(cm.thresholds.MaxDatabaseSize)/(1024*1024)),
 			Severity: "critical",
 		})
@@ -261,12 +262,12 @@ func (cm *CheckpointMonitor) evaluateThresholds(metrics *CheckpointMetrics) []Ch
 	// Check forensic file size
 	if metrics.ForensicSize > cm.thresholds.MaxForensicSize {
 		alerts = append(alerts, CheckpointAlert{
-			Timestamp:     now,
-			AlertType:     "size_threshold_exceeded",
-			MetricName:    "forensic_size",
-			CurrentValue:  float64(metrics.ForensicSize),
-			Threshold:     float64(cm.thresholds.MaxForensicSize),
-			Message:       fmt.Sprintf("Forensic file size %.2f MB exceeds threshold %.2f MB",
+			Timestamp:    now,
+			AlertType:    "size_threshold_exceeded",
+			MetricName:   "forensic_size",
+			CurrentValue: float64(metrics.ForensicSize),
+			Threshold:    float64(cm.thresholds.MaxForensicSize),
+			Message: fmt.Sprintf("Forensic file size %.2f MB exceeds threshold %.2f MB",
 				float64(metrics.ForensicSize)/(1024*1024), float64(cm.thresholds.MaxForensicSize)/(1024*1024)),
 			Severity: "warning",
 		})
@@ -275,12 +276,12 @@ func (cm *CheckpointMonitor) evaluateThresholds(metrics *CheckpointMetrics) []Ch
 	// Check objects directory size
 	if metrics.ObjectsDirSize > cm.thresholds.MaxObjectsDirSize {
 		alerts = append(alerts, CheckpointAlert{
-			Timestamp:     now,
-			AlertType:     "size_threshold_exceeded",
-			MetricName:    "objects_dir_size",
-			CurrentValue:  float64(metrics.ObjectsDirSize),
-			Threshold:     float64(cm.thresholds.MaxObjectsDirSize),
-			Message:       fmt.Sprintf("Objects directory size %.2f MB exceeds threshold %.2f MB",
+			Timestamp:    now,
+			AlertType:    "size_threshold_exceeded",
+			MetricName:   "objects_dir_size",
+			CurrentValue: float64(metrics.ObjectsDirSize),
+			Threshold:    float64(cm.thresholds.MaxObjectsDirSize),
+			Message: fmt.Sprintf("Objects directory size %.2f MB exceeds threshold %.2f MB",
 				float64(metrics.ObjectsDirSize)/(1024*1024), float64(cm.thresholds.MaxObjectsDirSize)/(1024*1024)),
 			Severity: "warning",
 		})
@@ -289,12 +290,12 @@ func (cm *CheckpointMonitor) evaluateThresholds(metrics *CheckpointMetrics) []Ch
 	// Check issue count
 	if metrics.DatabaseIssueCount > cm.thresholds.MaxIssueCount {
 		alerts = append(alerts, CheckpointAlert{
-			Timestamp:     now,
-			AlertType:     "count_threshold_exceeded",
-			MetricName:    "issue_count",
-			CurrentValue:  float64(metrics.DatabaseIssueCount),
-			Threshold:     float64(cm.thresholds.MaxIssueCount),
-			Message:       fmt.Sprintf("Issue count %d exceeds threshold %d",
+			Timestamp:    now,
+			AlertType:    "count_threshold_exceeded",
+			MetricName:   "issue_count",
+			CurrentValue: float64(metrics.DatabaseIssueCount),
+			Threshold:    float64(cm.thresholds.MaxIssueCount),
+			Message: fmt.Sprintf("Issue count %d exceeds threshold %d",
 				metrics.DatabaseIssueCount, cm.thresholds.MaxIssueCount),
 			Severity: "warning",
 		})
@@ -303,12 +304,12 @@ func (cm *CheckpointMonitor) evaluateThresholds(metrics *CheckpointMetrics) []Ch
 	// Check forensic line count
 	if metrics.ForensicLineCount > cm.thresholds.MaxForensicLineCount {
 		alerts = append(alerts, CheckpointAlert{
-			Timestamp:     now,
-			AlertType:     "count_threshold_exceeded",
-			MetricName:    "forensic_line_count",
-			CurrentValue:  float64(metrics.ForensicLineCount),
-			Threshold:     float64(cm.thresholds.MaxForensicLineCount),
-			Message:       fmt.Sprintf("Forensic line count %d exceeds threshold %d",
+			Timestamp:    now,
+			AlertType:    "count_threshold_exceeded",
+			MetricName:   "forensic_line_count",
+			CurrentValue: float64(metrics.ForensicLineCount),
+			Threshold:    float64(cm.thresholds.MaxForensicLineCount),
+			Message: fmt.Sprintf("Forensic line count %d exceeds threshold %d",
 				metrics.ForensicLineCount, cm.thresholds.MaxForensicLineCount),
 			Severity: "warning",
 		})
@@ -317,12 +318,12 @@ func (cm *CheckpointMonitor) evaluateThresholds(metrics *CheckpointMetrics) []Ch
 	// Check total record count
 	if metrics.TotalRecordCount > cm.thresholds.MaxTotalRecordCount {
 		alerts = append(alerts, CheckpointAlert{
-			Timestamp:     now,
-			AlertType:     "count_threshold_exceeded",
-			MetricName:    "total_record_count",
-			CurrentValue:  float64(metrics.TotalRecordCount),
-			Threshold:     float64(cm.thresholds.MaxTotalRecordCount),
-			Message:       fmt.Sprintf("Total record count %d exceeds threshold %d",
+			Timestamp:    now,
+			AlertType:    "count_threshold_exceeded",
+			MetricName:   "total_record_count",
+			CurrentValue: float64(metrics.TotalRecordCount),
+			Threshold:    float64(cm.thresholds.MaxTotalRecordCount),
+			Message: fmt.Sprintf("Total record count %d exceeds threshold %d",
 				metrics.TotalRecordCount, cm.thresholds.MaxTotalRecordCount),
 			Severity: "critical",
 		})
@@ -362,14 +363,14 @@ func (cm *CheckpointMonitor) publishAlert(alert CheckpointAlert) {
 	// Log to audit
 	if cm.auditLogger != nil {
 		details := map[string]interface{}{
-			"alert_type":     alert.AlertType,
-			"metric_name":    alert.MetricName,
-			"current_value":  alert.CurrentValue,
-			"threshold":      alert.Threshold,
-			"severity":       alert.Severity,
+			"alert_type":    alert.AlertType,
+			"metric_name":   alert.MetricName,
+			"current_value": alert.CurrentValue,
+			"threshold":     alert.Threshold,
+			"severity":      alert.Severity,
 		}
 		_ = cm.auditLogger.LogError("checkpoint_alert", "checkpoint-monitor", "system",
-			fmt.Errorf(alert.Message), details)
+			errors.New(alert.Message), details)
 	}
 }
 

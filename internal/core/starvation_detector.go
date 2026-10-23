@@ -14,35 +14,35 @@ import (
 
 // StarvationCondition represents a detected starvation state
 type StarvationCondition struct {
-	Timestamp          time.Time   `json:"timestamp"`
-	Workspace          string      `json:"workspace"`
-	OpenBeads          int         `json:"open_beads"`
-	ReadyCandidates    int         `json:"ready_candidates"`
-	ExcludedBeads      int         `json:"excluded_beads"`
-	ExclusionReasons   []string    `json:"exclusion_reasons"`
-	StaleAssignees     int         `json:"stale_assignees"`
-	ClosedWithAssignee int         `json:"closed_with_assignee"`
-	CircularDeps       int         `json:"circular_deps"`
-	DBInconsistent     bool        `json:"db_inconsistent"`
-	FallbackAnalysis   *FallbackAnalysis `json:"fallback_analysis,omitempty"`
+	Timestamp            time.Time             `json:"timestamp"`
+	Workspace            string                `json:"workspace"`
+	OpenBeads            int                   `json:"open_beads"`
+	ReadyCandidates      int                   `json:"ready_candidates"`
+	ExcludedBeads        int                   `json:"excluded_beads"`
+	ExclusionReasons     []string              `json:"exclusion_reasons"`
+	StaleAssignees       int                   `json:"stale_assignees"`
+	ClosedWithAssignee   int                   `json:"closed_with_assignee"`
+	CircularDeps         int                   `json:"circular_deps"`
+	DBInconsistent       bool                  `json:"db_inconsistent"`
+	FallbackAnalysis     *FallbackAnalysis     `json:"fallback_analysis,omitempty"`
 	CorruptionDetections []CorruptionDetection `json:"corruption_detections,omitempty"`
 
 	// Diagnostic query details
-	UsedQuery          string      `json:"used_query,omitempty"`
-	QueryFilters       []string    `json:"query_filters,omitempty"`
-	ActualOpenCount    int         `json:"actual_open_count,omitempty"`
-	ActualReadyCount   int         `json:"actual_ready_count,omitempty"`
-	QueryTimestamp     time.Time   `json:"query_timestamp,omitempty"`
+	UsedQuery        string    `json:"used_query,omitempty"`
+	QueryFilters     []string  `json:"query_filters,omitempty"`
+	ActualOpenCount  int       `json:"actual_open_count,omitempty"`
+	ActualReadyCount int       `json:"actual_ready_count,omitempty"`
+	QueryTimestamp   time.Time `json:"query_timestamp,omitempty"`
 }
 
 // StarvationDetector monitors for bead starvation conditions
 type StarvationDetector struct {
-	workspaceDir      string
-	binaryPath        string
-	beadValidator     *BeadValidator
-	auditLogger       *AuditLogger
-	eventPublisher    *EventPublisher
-	fallbackExecutor  *FallbackQueryExecutor
+	workspaceDir     string
+	binaryPath       string
+	beadValidator    *BeadValidator
+	auditLogger      *AuditLogger
+	eventPublisher   *EventPublisher
+	fallbackExecutor *FallbackQueryExecutor
 
 	// Configuration
 	checkInterval     time.Duration
@@ -51,45 +51,45 @@ type StarvationDetector struct {
 	dryRun            bool
 
 	// State
-	lastCheckTime     time.Time
-	lastAlertTime     time.Time
-	running           bool
-	mu                sync.RWMutex
-	ctx               context.Context
-	cancel            context.CancelFunc
+	lastCheckTime time.Time
+	lastAlertTime time.Time
+	running       bool
+	mu            sync.RWMutex
+	ctx           context.Context
+	cancel        context.CancelFunc
 
 	// Detection history
-	detectionHistory  []StarvationCondition
-	maxHistorySize    int
+	detectionHistory []StarvationCondition
+	maxHistorySize   int
 
 	// Retry state with exponential backoff
-	retryState        *RetryState
+	retryState *RetryState
 
 	// Pluck-specific retry state with exponential backoff
-	pluckRetryState   *PluckRetryState
+	pluckRetryState *PluckRetryState
 }
 
 // RetryState tracks retry attempts and backoff timing
 type RetryState struct {
-	CurrentAttempt    int
-	MaxRetries        int
-	FirstDetection    time.Time
-	LastAttempt       time.Time
-	Condition         *StarvationCondition
-	BackoffDurations  []time.Duration
+	CurrentAttempt   int
+	MaxRetries       int
+	FirstDetection   time.Time
+	LastAttempt      time.Time
+	Condition        *StarvationCondition
+	BackoffDurations []time.Duration
 }
 
 // PluckRetryState tracks Pluck-specific retry attempts with exponential backoff
 type PluckRetryState struct {
-	CurrentAttempt      int
-	ConsecutiveFailures int
-	MaxRetries          int
-	FirstFailure        time.Time
-	LastFailure         time.Time
-	LastSuccess         time.Time
-	InitialDelay        time.Duration
-	ValidationThreshold int  // Attempts after which to trigger validation (e.g., 3)
-	RemediationThreshold int  // Attempts after which to create remediation bead (e.g., 5)
+	CurrentAttempt       int
+	ConsecutiveFailures  int
+	MaxRetries           int
+	FirstFailure         time.Time
+	LastFailure          time.Time
+	LastSuccess          time.Time
+	InitialDelay         time.Duration
+	ValidationThreshold  int // Attempts after which to trigger validation (e.g., 3)
+	RemediationThreshold int // Attempts after which to create remediation bead (e.g., 5)
 }
 
 // Default retry backoff sequence: 5m → 10m → 20m → 40m (2x exponential)
@@ -111,16 +111,16 @@ var defaultPluckBackoffSequence = []time.Duration{
 
 // DetectorConfig holds configuration for the starvation detector
 type DetectorConfig struct {
-	WorkspaceDir         string
-	BinaryPath         string // Path to bead binary (default: "bead")
-	CheckInterval      time.Duration
-	AlertCooldown      time.Duration
-	AutoRepairEnabled  bool
+	WorkspaceDir      string
+	BinaryPath        string // Path to bead binary (default: "bead")
+	CheckInterval     time.Duration
+	AlertCooldown     time.Duration
+	AutoRepairEnabled bool
 	DryRun            bool
 	AuditLogger       *AuditLogger
 	EventPublisher    *EventPublisher
 	MaxHistorySize    int
-	MaxRetries        int           // Maximum retry attempts before escalation (default: 4)
+	MaxRetries        int             // Maximum retry attempts before escalation (default: 4)
 	BackoffSequence   []time.Duration // Custom backoff sequence (optional)
 
 	// Pluck-specific retry configuration
@@ -211,8 +211,8 @@ func NewStarvationDetector(config *DetectorConfig) *StarvationDetector {
 // detectStarvation checks for starvation conditions
 func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 	condition := &StarvationCondition{
-		Timestamp:    time.Now(),
-		Workspace:    d.workspaceDir,
+		Timestamp:      time.Now(),
+		Workspace:      d.workspaceDir,
 		QueryTimestamp: time.Now(),
 	}
 	condition.UsedQuery = "list"
@@ -260,7 +260,7 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 				"error":     err.Error(),
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 	}
 
@@ -278,12 +278,12 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 					// Log error but continue
 					if d.auditLogger != nil {
 						event := map[string]interface{}{
-							"action":         "auto_heal_failed",
+							"action":          "auto_heal_failed",
 							"corruption_type": detection.CorruptionType,
-							"error":          err.Error(),
-							"timestamp":      time.Now().Format(time.RFC3339),
+							"error":           err.Error(),
+							"timestamp":       time.Now().Format(time.RFC3339),
 						}
-						_ = d.auditLogger.Log(event)
+						d.logAudit(event)
 					}
 				}
 			}
@@ -308,13 +308,11 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 
 	// Check each open bead for exclusion reasons
 	for _, bead := range openBeads {
-		excluded := false
 
 		// Check for stale assignee (assigned but open)
 		if bead.Assignee != "" && bead.Status == BeadStateOpen {
 			staleAssignees++
 			excludedBeads++
-			excluded = true
 			exclusionReasons = append(exclusionReasons,
 				fmt.Sprintf("Bead %s: assigned to %s but status is open", bead.ID, bead.Assignee))
 		}
@@ -326,7 +324,6 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 				if d.isBeadClosed(blockerID) {
 					// Blocked by a closed bead - this shouldn't happen
 					excludedBeads++
-					excluded = true
 					exclusionReasons = append(exclusionReasons,
 						fmt.Sprintf("Bead %s: blocked by closed bead %s", bead.ID, blockerID))
 				}
@@ -338,7 +335,6 @@ func (d *StarvationDetector) detectStarvation() (*StarvationCondition, error) {
 			if blockedID == bead.ID {
 				circularDeps++
 				excludedBeads++
-				excluded = true
 				exclusionReasons = append(exclusionReasons,
 					fmt.Sprintf("Bead %s: circular self-dependency", bead.ID))
 			}
@@ -444,10 +440,69 @@ func (d *StarvationDetector) logStarvationDiagnostics(diagnostics map[string]int
 	}
 
 	// Log the structured entry
-	if err := d.auditLogger.Log(logData); err != nil {
+	if err := d.logAudit(logData); err != nil {
 		// If logging fails, try to write to a fallback file
 		d.writeFallbackDiagnostics(logData)
 	}
+}
+
+// logAudit bridges the detector's map-shaped diagnostics entries onto the
+// AuditEvent-based AuditLogger API: "action"/"event_type" becomes the event
+// type, "success" the outcome flag, and everything else lands in Details.
+func (d *StarvationDetector) logAudit(event map[string]interface{}) error {
+	if d.auditLogger == nil {
+		return nil
+	}
+
+	details := make(map[string]interface{}, len(event))
+	for k, v := range event {
+		details[k] = v
+	}
+
+	timestamp := time.Now()
+	if raw, ok := details["timestamp"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			timestamp = parsed
+		}
+	}
+	delete(details, "timestamp")
+
+	eventType, _ := details["action"].(string)
+	if eventType == "" {
+		eventType, _ = details["event_type"].(string)
+	}
+	delete(details, "action")
+	delete(details, "event_type")
+
+	success, _ := details["success"].(bool)
+	delete(details, "success")
+
+	return d.auditLogger.Log(AuditEvent{
+		Timestamp: timestamp,
+		EventType: eventType,
+		Details:   details,
+		Success:   success,
+	})
+}
+
+// publishEvent bridges the detector's map-shaped events onto the
+// ConnectionEvent-based EventPublisher API.
+func (d *StarvationDetector) publishEvent(event map[string]interface{}) {
+	if d.eventPublisher == nil {
+		return
+	}
+
+	message, _ := event["type"].(string)
+	if message == "" {
+		message, _ = event["action"].(string)
+	}
+
+	d.eventPublisher.Publish(&ConnectionEvent{
+		Type:      EventStateChange,
+		Timestamp: time.Now(),
+		Data:      event,
+		Message:   message,
+	})
 }
 
 // writeFallbackDiagnostics writes diagnostic data to a fallback file when audit logging fails
@@ -591,18 +646,18 @@ func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, erro
 		// Log the failure with comprehensive diagnostics
 		if d.auditLogger != nil {
 			event := map[string]interface{}{
-				"action":             "pluck_retry_attempt",
-				"attempt_number":      attempt + 1,
+				"action":               "pluck_retry_attempt",
+				"attempt_number":       attempt + 1,
 				"consecutive_failures": d.pluckRetryState.ConsecutiveFailures,
-				"ready_candidates":    len(beads),
-				"open_beads":          len(openBeads),
-				"timestamp":           time.Now().Format(time.RFC3339),
-				"used_query":          "bead list --ready",
-				"query_filters":       []string{"--ready"},
-				"actual_open_count":   len(openBeads),
-				"actual_ready_count":  len(beads),
+				"ready_candidates":     len(beads),
+				"open_beads":           len(openBeads),
+				"timestamp":            time.Now().Format(time.RFC3339),
+				"used_query":           "bead list --ready",
+				"query_filters":        []string{"--ready"},
+				"actual_open_count":    len(openBeads),
+				"actual_ready_count":   len(beads),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 
 		// Create comprehensive diagnostic log entry for the mismatch
@@ -627,12 +682,12 @@ func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, erro
 		if openBeadsCount > 0 {
 			if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.ValidationThreshold {
 				// Trigger bead state validation after 3 consecutive failures
-				go d.triggerBeadStateValidation(attempt + 1, openBeadsCount)
+				go d.triggerBeadStateValidation(attempt+1, openBeadsCount)
 			}
 
 			if d.pluckRetryState.ConsecutiveFailures >= d.pluckRetryState.RemediationThreshold {
 				// Create remediation bead after 5 consecutive failures
-				go d.createRemediationBead(d.pluckRetryState.ConsecutiveFailures, openBeadsCount)
+				go d.createPluckRemediationBead(d.pluckRetryState.ConsecutiveFailures, openBeadsCount)
 				// Reset counter after creating remediation bead to avoid duplicate beads
 				d.pluckRetryState.ConsecutiveFailures = 0
 				// Return error to caller
@@ -647,16 +702,16 @@ func (d *StarvationDetector) listBeadsWithRetry(filters ...string) ([]Bead, erro
 		// Publish retry event
 		if d.eventPublisher != nil {
 			event := map[string]interface{}{
-				"type":                "pluck_retry",
-				"attempt_number":      attempt + 1,
-				"max_retries":         d.pluckRetryState.MaxRetries,
-				"backoff_duration":    backoffDelay.String(),
-				"ready_candidates":    len(beads),
-				"open_beads":          len(openBeads),
+				"type":                 "pluck_retry",
+				"attempt_number":       attempt + 1,
+				"max_retries":          d.pluckRetryState.MaxRetries,
+				"backoff_duration":     backoffDelay.String(),
+				"ready_candidates":     len(beads),
+				"open_beads":           len(openBeads),
 				"consecutive_failures": d.pluckRetryState.ConsecutiveFailures,
-				"timestamp":           time.Now().Format(time.RFC3339),
+				"timestamp":            time.Now().Format(time.RFC3339),
 			}
-			_ = d.eventPublisher.Publish(event)
+			d.publishEvent(event)
 		}
 
 		// Wait before retry (unless this is the last attempt)
@@ -701,13 +756,13 @@ func (d *StarvationDetector) calculatePluckBackoff(attempt int) time.Duration {
 func (d *StarvationDetector) triggerBeadStateValidation(attempt int, openBeads int) {
 	if d.auditLogger != nil {
 		event := map[string]interface{}{
-			"action":            "bead_state_validation_triggered",
-			"trigger_reason":    "consecutive_pluck_failures",
-			"attempt_number":    attempt,
-			"open_beads":        openBeads,
-			"timestamp":         time.Now().Format(time.RFC3339),
+			"action":         "bead_state_validation_triggered",
+			"trigger_reason": "consecutive_pluck_failures",
+			"attempt_number": attempt,
+			"open_beads":     openBeads,
+			"timestamp":      time.Now().Format(time.RFC3339),
 		}
-		_ = d.auditLogger.Log(event)
+		d.logAudit(event)
 	}
 
 	// Run bead validator
@@ -725,7 +780,7 @@ func (d *StarvationDetector) triggerBeadStateValidation(attempt int, openBeads i
 				"error":     err.Error(),
 				"timestamp": time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 		return
 	}
@@ -733,17 +788,17 @@ func (d *StarvationDetector) triggerBeadStateValidation(attempt int, openBeads i
 	// Publish validation results
 	if d.eventPublisher != nil {
 		event := map[string]interface{}{
-			"type":      "bead_state_validation",
-			"report":    report,
+			"type":         "bead_state_validation",
+			"report":       report,
 			"triggered_by": "pluck_retry",
-			"timestamp": time.Now().Format(time.RFC3339),
+			"timestamp":    time.Now().Format(time.RFC3339),
 		}
-		_ = d.eventPublisher.Publish(event)
+		d.publishEvent(event)
 	}
 }
 
-// createRemediationBead creates a remediation bead for the workspace after repeated Pluck failures
-func (d *StarvationDetector) createRemediationBead(failureCount int, openBeads int) error {
+// createPluckRemediationBead creates a remediation bead for the workspace after repeated Pluck failures
+func (d *StarvationDetector) createPluckRemediationBead(failureCount int, openBeads int) error {
 	if d.dryRun {
 		if d.auditLogger != nil {
 			event := map[string]interface{}{
@@ -753,7 +808,7 @@ func (d *StarvationDetector) createRemediationBead(failureCount int, openBeads i
 				"open_beads":    openBeads,
 				"timestamp":     time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 		return nil
 	}
@@ -786,15 +841,15 @@ func (d *StarvationDetector) createRemediationBead(failureCount int, openBeads i
 3. This remediation bead created after %d consecutive failures (threshold reached)
 
 ### Recommended Actions
-1. Review bead database for corruption: \`bead doctor\`
-2. Check checkpoint consistency: \`bead sync flush-only\`
+1. Review bead database for corruption: `+"`bead doctor`"+`
+2. Check checkpoint consistency: `+"`bead sync flush-only`"+`
 3. Verify dependency graph integrity
 4. Review recent bead operations for data loss
 5. Consider restoring from checkpoint if corruption is confirmed
 
 ### Next Steps
-- If \`bead doctor\` reports issues, follow recommended repair steps
-- If validation shows corruption, consider: \`bead sync import-only --input .beads/checkpoint/forensic.jsonl --restore-into-empty\`
+- If `+"`bead doctor`"+` reports issues, follow recommended repair steps
+- If validation shows corruption, consider: `+"`bead sync import-only --input .beads/checkpoint/forensic.jsonl --restore-into-empty`"+`
 - Monitor future Pluck operations for recurrence
 
 ---
@@ -833,7 +888,7 @@ This is an automated remediation bead created by the starvation detector after e
 				"failure_count": failureCount,
 				"timestamp":     time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 		return fmt.Errorf("failed to create remediation bead: %w (output: %s)", err, string(output))
 	}
@@ -846,7 +901,7 @@ This is an automated remediation bead created by the starvation detector after e
 			"open_beads":    openBeads,
 			"timestamp":     time.Now().Format(time.RFC3339),
 		}
-		_ = d.auditLogger.Log(event)
+		d.logAudit(event)
 	}
 
 	// Publish creation event
@@ -857,7 +912,7 @@ This is an automated remediation bead created by the starvation detector after e
 			"open_beads":    openBeads,
 			"timestamp":     time.Now().Format(time.RFC3339),
 		}
-		_ = d.eventPublisher.Publish(event)
+		d.publishEvent(event)
 	}
 
 	return nil
@@ -866,8 +921,8 @@ This is an automated remediation bead created by the starvation detector after e
 // runDiagnostics performs full diagnostic check
 func (d *StarvationDetector) runDiagnostics(condition *StarvationCondition) (*DiagnosticReport, error) {
 	report := &DiagnosticReport{
-		Timestamp:      condition.Timestamp,
-		Workspace:      condition.Workspace,
+		Timestamp:          condition.Timestamp,
+		Workspace:          condition.Workspace,
 		StarvationDetected: true,
 	}
 
@@ -899,15 +954,15 @@ func (d *StarvationDetector) runDiagnostics(condition *StarvationCondition) (*Di
 
 // DiagnosticReport represents the results of diagnostic checks
 type DiagnosticReport struct {
-	Timestamp              time.Time             `json:"timestamp"`
-	Workspace              string                `json:"workspace"`
-	StarvationDetected     bool                  `json:"starvation_detected"`
-	Condition              *StarvationCondition  `json:"condition,omitempty"`
-	ValidationResults      []ValidationResult    `json:"validation_results,omitempty"`
-	FixableIssues          []ValidationResult    `json:"fixable_issues,omitempty"`
-	ManualInterventionRequired []ValidationResult `json:"manual_intervention_required,omitempty"`
-	ValidationErrors       []string              `json:"validation_errors,omitempty"`
-	AutoRepairsApplied     int                   `json:"auto_repairs_applied"`
+	Timestamp                  time.Time            `json:"timestamp"`
+	Workspace                  string               `json:"workspace"`
+	StarvationDetected         bool                 `json:"starvation_detected"`
+	Condition                  *StarvationCondition `json:"condition,omitempty"`
+	ValidationResults          []ValidationResult   `json:"validation_results,omitempty"`
+	FixableIssues              []ValidationResult   `json:"fixable_issues,omitempty"`
+	ManualInterventionRequired []ValidationResult   `json:"manual_intervention_required,omitempty"`
+	ValidationErrors           []string             `json:"validation_errors,omitempty"`
+	AutoRepairsApplied         int                  `json:"auto_repairs_applied"`
 }
 
 // autoRepair performs automatic repairs for all fixable issues
@@ -932,12 +987,12 @@ func (d *StarvationDetector) autoRepair(report *DiagnosticReport) error {
 	// Log audit event
 	if d.auditLogger != nil {
 		event := map[string]interface{}{
-			"action":     "auto_repair",
-			"workspace":  d.workspaceDir,
+			"action":        "auto_repair",
+			"workspace":     d.workspaceDir,
 			"fixes_applied": report.AutoRepairsApplied,
-			"timestamp":  time.Now().Format(time.RFC3339),
+			"timestamp":     time.Now().Format(time.RFC3339),
 		}
-		_ = d.auditLogger.Log(event)
+		d.logAudit(event)
 	}
 
 	return nil
@@ -977,11 +1032,11 @@ func (d *StarvationDetector) createRemediationBead(report *DiagnosticReport) err
 	// Log bead creation
 	if d.auditLogger != nil {
 		event := map[string]interface{}{
-			"action":     "create_remediation_bead",
-			"workspace":  d.workspaceDir,
-			"timestamp":  time.Now().Format(time.RFC3339),
+			"action":    "create_remediation_bead",
+			"workspace": d.workspaceDir,
+			"timestamp": time.Now().Format(time.RFC3339),
 		}
-		_ = d.auditLogger.Log(event)
+		d.logAudit(event)
 	}
 
 	return nil
@@ -1017,12 +1072,12 @@ func (d *StarvationDetector) createEscalationBead(report *DiagnosticReport) erro
 	// Log escalation
 	if d.auditLogger != nil {
 		event := map[string]interface{}{
-			"action":         "create_escalation_bead",
-			"workspace":      d.workspaceDir,
-			"attempts_made":  d.retryState.CurrentAttempt,
-			"timestamp":      time.Now().Format(time.RFC3339),
+			"action":        "create_escalation_bead",
+			"workspace":     d.workspaceDir,
+			"attempts_made": d.retryState.CurrentAttempt,
+			"timestamp":     time.Now().Format(time.RFC3339),
 		}
-		_ = d.auditLogger.Log(event)
+		d.logAudit(event)
 	}
 
 	return nil
@@ -1289,7 +1344,7 @@ func (d *StarvationDetector) checkAndAlert() error {
 					"error":     err.Error(),
 					"timestamp": time.Now().Format(time.RFC3339),
 				}
-				_ = d.auditLogger.Log(event)
+				d.logAudit(event)
 			}
 			return nil // Will retry on next check interval
 		}
@@ -1343,29 +1398,29 @@ func (d *StarvationDetector) handleStarvationWithRetry(condition *StarvationCond
 	// Log attempt
 	if d.auditLogger != nil {
 		event := map[string]interface{}{
-			"action":            "starvation_retry_attempt",
-			"attempt_number":    d.retryState.CurrentAttempt,
-			"max_retries":       d.retryState.MaxRetries,
-			"backoff_duration":  backoffDuration.String(),
-			"open_beads":        condition.OpenBeads,
-			"ready_candidates":  condition.ReadyCandidates,
-			"timestamp":         time.Now().Format(time.RFC3339),
+			"action":           "starvation_retry_attempt",
+			"attempt_number":   d.retryState.CurrentAttempt,
+			"max_retries":      d.retryState.MaxRetries,
+			"backoff_duration": backoffDuration.String(),
+			"open_beads":       condition.OpenBeads,
+			"ready_candidates": condition.ReadyCandidates,
+			"timestamp":        time.Now().Format(time.RFC3339),
 		}
-		_ = d.auditLogger.Log(event)
+		d.logAudit(event)
 	}
 
 	// Publish event
 	if d.eventPublisher != nil {
 		event := map[string]interface{}{
-			"type":              "starvation_detected",
-			"condition":         condition,
-			"report":            report,
-			"retry_attempt":     d.retryState.CurrentAttempt,
-			"max_retries":       d.retryState.MaxRetries,
-			"backoff_duration":  backoffDuration.String(),
-			"timestamp":         time.Now().Format(time.RFC3339),
+			"type":             "starvation_detected",
+			"condition":        condition,
+			"report":           report,
+			"retry_attempt":    d.retryState.CurrentAttempt,
+			"max_retries":      d.retryState.MaxRetries,
+			"backoff_duration": backoffDuration.String(),
+			"timestamp":        time.Now().Format(time.RFC3339),
 		}
-		_ = d.eventPublisher.Publish(event)
+		d.publishEvent(event)
 	}
 
 	// Attempt repair with increasing aggressiveness based on attempt number
@@ -1380,7 +1435,7 @@ func (d *StarvationDetector) handleStarvationWithRetry(condition *StarvationCond
 					"error":          repairErr.Error(),
 					"timestamp":      time.Now().Format(time.RFC3339),
 				}
-				_ = d.auditLogger.Log(event)
+				d.logAudit(event)
 			}
 		}
 	}
@@ -1439,11 +1494,11 @@ func (d *StarvationDetector) resetRetryState() {
 		// Log resolution
 		if d.auditLogger != nil {
 			event := map[string]interface{}{
-				"action":         "starvation_resolved",
-				"attempts_made":  d.retryState.CurrentAttempt,
-				"timestamp":       time.Now().Format(time.RFC3339),
+				"action":        "starvation_resolved",
+				"attempts_made": d.retryState.CurrentAttempt,
+				"timestamp":     time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 	}
 
@@ -1507,7 +1562,7 @@ func (d *StarvationDetector) attemptRepair(report *DiagnosticReport, attemptNumb
 				"error":          err.Error(),
 				"timestamp":      time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 	}
 
@@ -1521,7 +1576,7 @@ func (d *StarvationDetector) attemptRepair(report *DiagnosticReport, attemptNumb
 				"error":          err.Error(),
 				"timestamp":      time.Now().Format(time.RFC3339),
 			}
-			_ = d.auditLogger.Log(event)
+			d.logAudit(event)
 		}
 	}
 
@@ -1620,24 +1675,24 @@ func (d *StarvationDetector) healDependencies(detection CorruptionDetection, fal
 						if output, err := updateCmd.CombinedOutput(); err != nil {
 							if d.auditLogger != nil {
 								event := map[string]interface{}{
-									"action":         "dependency_heal_failed",
-									"bead_id":        beadID,
-									"blocked_by":     blockerID,
-									"error":          err.Error(),
-									"output":         string(output),
-									"timestamp":      time.Now().Format(time.RFC3339),
+									"action":     "dependency_heal_failed",
+									"bead_id":    beadID,
+									"blocked_by": blockerID,
+									"error":      err.Error(),
+									"output":     string(output),
+									"timestamp":  time.Now().Format(time.RFC3339),
 								}
-								_ = d.auditLogger.Log(event)
+								d.logAudit(event)
 							}
 						} else {
 							if d.auditLogger != nil {
 								event := map[string]interface{}{
-									"action":         "dependency_healed",
-									"bead_id":        beadID,
-									"blocked_by":     blockerID,
-									"timestamp":      time.Now().Format(time.RFC3339),
+									"action":     "dependency_healed",
+									"bead_id":    beadID,
+									"blocked_by": blockerID,
+									"timestamp":  time.Now().Format(time.RFC3339),
 								}
-								_ = d.auditLogger.Log(event)
+								d.logAudit(event)
 							}
 						}
 					}
@@ -1687,36 +1742,26 @@ func (d *StarvationDetector) healLabels(detection CorruptionDetection, fallbackA
 					if output, err := updateCmd.CombinedOutput(); err != nil {
 						if d.auditLogger != nil {
 							event := map[string]interface{}{
-								"action":         "label_heal_failed",
-								"bead_id":        beadID,
-								"label":          label,
-								"error":          err.Error(),
-								"output":         string(output),
-								"timestamp":      time.Now().Format(time.RFC3339),
+								"action":    "label_heal_failed",
+								"bead_id":   beadID,
+								"label":     label,
+								"error":     err.Error(),
+								"output":    string(output),
+								"timestamp": time.Now().Format(time.RFC3339),
 							}
-							_ = d.auditLogger.Log(event)
+							d.logAudit(event)
 						}
 					} else {
 						if d.auditLogger != nil {
 							event := map[string]interface{}{
-								"action":         "label_healed",
-								"bead_id":        beadID,
-								"label":          label,
-								"timestamp":      time.Now().Format(time.RFC3339),
+								"action":    "label_healed",
+								"bead_id":   beadID,
+								"label":     label,
+								"timestamp": time.Now().Format(time.RFC3339),
 							}
-							_ = d.auditLogger.Log(event)
+							d.logAudit(event)
 						}
 					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-				// Only remove if older than 10 minutes
-				if time.Since(info.ModTime()) > 10*time.Minute {
-					os.Remove(lockFile)
 				}
 			}
 		}
@@ -1754,7 +1799,7 @@ func (d *StarvationDetector) Start(ctx context.Context) error {
 						"error":     err.Error(),
 						"timestamp": time.Now().Format(time.RFC3339),
 					}
-					_ = d.auditLogger.Log(event)
+					d.logAudit(event)
 				}
 			}
 		}

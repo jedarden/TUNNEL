@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -24,7 +23,7 @@ func TestCheckpointMonitor_CollectMetrics(t *testing.T) {
 
 	// Create checkpoint current.json with test data
 	checkpointData := map[string]interface{}{
-		"issue_count":       42,
+		"issue_count":        42,
 		"total_record_count": 150,
 		"event_count":        200,
 		"active_root": map[string]string{
@@ -92,8 +91,8 @@ func TestCheckpointMonitor_EvaluateThresholds(t *testing.T) {
 	monitor := NewCheckpointMonitor("", thresholds, nil, nil)
 
 	tests := []struct {
-		name     string
-		metrics  CheckpointMetrics
+		name       string
+		metrics    CheckpointMetrics
 		wantAlerts int
 	}{
 		{
@@ -101,7 +100,7 @@ func TestCheckpointMonitor_EvaluateThresholds(t *testing.T) {
 			metrics: CheckpointMetrics{
 				DatabaseSize:       500,
 				ForensicSize:       200,
-				ObjectsDirSize:    1000,
+				ObjectsDirSize:     1000,
 				DatabaseIssueCount: 50,
 				ForensicLineCount:  500,
 				TotalRecordCount:   1000,
@@ -113,7 +112,7 @@ func TestCheckpointMonitor_EvaluateThresholds(t *testing.T) {
 			metrics: CheckpointMetrics{
 				DatabaseSize:       2000,
 				ForensicSize:       200,
-				ObjectsDirSize:    1000,
+				ObjectsDirSize:     1000,
 				DatabaseIssueCount: 50,
 				ForensicLineCount:  500,
 				TotalRecordCount:   1000,
@@ -125,9 +124,9 @@ func TestCheckpointMonitor_EvaluateThresholds(t *testing.T) {
 			metrics: CheckpointMetrics{
 				DatabaseSize:       2000,
 				ForensicSize:       1000,
-				ObjectsDirSize:    3000,
+				ObjectsDirSize:     3000,
 				DatabaseIssueCount: 150,
-				ForensicLineCount: 2000,
+				ForensicLineCount:  2000,
 				TotalRecordCount:   6000,
 			},
 			wantAlerts: 6,
@@ -137,7 +136,7 @@ func TestCheckpointMonitor_EvaluateThresholds(t *testing.T) {
 			metrics: CheckpointMetrics{
 				DatabaseSize:       1000,
 				ForensicSize:       500,
-				ObjectsDirSize:    2000,
+				ObjectsDirSize:     2000,
 				DatabaseIssueCount: 100,
 				ForensicLineCount:  1000,
 				TotalRecordCount:   5000,
@@ -208,23 +207,30 @@ func TestCheckpointMonitor_AlertCooldown(t *testing.T) {
 		Severity:     "warning",
 	}
 
-	// Publish first alert
-	monitor.publishAlert(alert)
-
-	// Try to publish again immediately - should be blocked by cooldown
-	monitor.publishAlert(alert)
-
-	// Check that only one subscriber received the event
 	subscriber := eventPublisher.Subscribe("test", nil)
 	defer eventPublisher.Unsubscribe("test")
 
-	time.Sleep(50 * time.Millisecond) // Give time for event to propagate
+	publishIfDue := func() {
+		if monitor.shouldAlert(alert.MetricName) {
+			monitor.recordAlert(alert.MetricName)
+			monitor.publishAlert(alert)
+		}
+	}
+
+	publishIfDue()
+	publishIfDue()
+	if got := len(subscriber.Channel); got != 1 {
+		t.Fatalf("events before cooldown = %d, want 1", got)
+	}
 
 	// After cooldown, alert should be allowed again
 	time.Sleep(250 * time.Millisecond)
 
 	// This should publish the alert
-	monitor.publishAlert(alert)
+	publishIfDue()
+	if got := len(subscriber.Channel); got != 2 {
+		t.Fatalf("events after cooldown = %d, want 2", got)
+	}
 }
 
 func TestCheckpointMonitor_ConcurrentAccess(t *testing.T) {
@@ -241,7 +247,7 @@ func TestCheckpointMonitor_ConcurrentAccess(t *testing.T) {
 	checkpointData := map[string]interface{}{
 		"issue_count":        10,
 		"total_record_count": 50,
-		"event_count":         100,
+		"event_count":        100,
 		"active_root":        map[string]string{"path": "objects/test.jsonl"},
 	}
 	currentJson, _ := json.Marshal(checkpointData)
@@ -300,10 +306,10 @@ func TestCheckpointMonitor_GetAndSetThresholds(t *testing.T) {
 
 	// Set new thresholds
 	newThresholds := &CheckpointThresholds{
-		MaxIssueCount:      2000,
-		MaxDatabaseSize:     200 * 1024 * 1024,
-		CheckInterval:      10 * time.Minute,
-		AlertCooldown:      30 * time.Minute,
+		MaxIssueCount:   2000,
+		MaxDatabaseSize: 200 * 1024 * 1024,
+		CheckInterval:   10 * time.Minute,
+		AlertCooldown:   30 * time.Minute,
 	}
 
 	monitor.SetThresholds(newThresholds)
@@ -378,7 +384,7 @@ func TestCheckpointMonitor_ContextCancellation(t *testing.T) {
 	checkpointData := map[string]interface{}{
 		"issue_count":        5,
 		"total_record_count": 25,
-		"event_count":         50,
+		"event_count":        50,
 	}
 	currentJson, _ := json.Marshal(checkpointData)
 	if err := os.WriteFile(filepath.Join(checkpointDir, "current.json"), currentJson, 0644); err != nil {
@@ -420,8 +426,8 @@ func TestCheckpointThresholds_SeverityLevels(t *testing.T) {
 	metrics := &CheckpointMetrics{
 		DatabaseSize:       2000, // Exceeds by 2x - should be critical
 		ForensicSize:       1000, // Exceeds by 2x - should be warning
-		ObjectsDirSize:    3000, // Exceeds by 1.5x - should be warning
-		DatabaseIssueCount: 150, // Exceeds by 1.5x - should be warning
+		ObjectsDirSize:     3000, // Exceeds by 1.5x - should be warning
+		DatabaseIssueCount: 150,  // Exceeds by 1.5x - should be warning
 		ForensicLineCount:  2000, // Exceeds by 2x - should be warning
 		TotalRecordCount:   6000, // Exceeds by 1.2x - should be critical
 	}

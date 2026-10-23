@@ -38,7 +38,7 @@ type TokenResponse struct {
 
 // OAuthConfig contains OAuth-specific configuration
 type OAuthConfig struct {
-	Provider     string `json:"provider"`      // github, google, etc.
+	Provider     string `json:"provider"` // github, google, etc.
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 	RedirectURI  string `json:"redirect_uri"`
@@ -280,8 +280,7 @@ func (o *OAuthProvider) startCallbackServer(redirectURI string) error {
 		Handler: mux,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	o.cancel = cancel
+	_, o.cancel = context.WithCancel(context.Background())
 
 	go func() {
 		if err := o.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -455,12 +454,13 @@ func (o *OAuthProvider) GetConnectionInfo() (*providers.ConnectionInfo, error) {
 
 	info := &providers.ConnectionInfo{
 		Status: "connected",
-		Extra:  make(map[string]interface{}),
+		Extra: map[string]interface{}{
+			"provider": oauthConfig.Provider,
+		},
 	}
 
 	if o.IsConnected() {
 		info.Status = "connected"
-		info.Extra["provider"] = oauthConfig.Provider
 		info.Extra["authenticated"] = true
 	} else {
 		info.Status = "disconnected"

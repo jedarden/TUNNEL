@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os/exec"
 	"strings"
 	"time"
@@ -264,7 +263,7 @@ func (c *CloudflareProvider) GetLogs(since time.Time) ([]providers.LogEntry, err
 		return []providers.LogEntry{}, nil
 	}
 
-	var logs []providers.LogEntry
+	logs := make([]providers.LogEntry, 0)
 
 	// Try journalctl for cloudflared service
 	sinceArg := since.Format("2006-01-02 15:04:05")

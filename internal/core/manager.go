@@ -48,18 +48,18 @@ type DefaultConnectionManager struct {
 
 // ManagerConfig holds configuration for the connection manager
 type ManagerConfig struct {
-	EnableMetrics       bool
-	EnableFailover      bool
-	FailoverConfig      *FailoverConfig
-	MetricsInterval     time.Duration
-	EventBufferSize     int
-	DataDir             string // Directory for persistent storage (e.g., ~/.config/tunnel/)
-	EnablePersistence   bool  // Whether to enable metrics history persistence
-	MetricsRetention    time.Duration // How long to keep metrics history (default: 30 days)
-	EnableCheckpointMonitor bool // Whether to enable checkpoint monitoring
-	CheckpointThresholds *CheckpointThresholds // Checkpoint monitoring thresholds
-	WorkspaceDir        string // Workspace directory containing .beads (for checkpoint monitoring)
-	AuditLogger         *AuditLogger
+	EnableMetrics           bool
+	EnableFailover          bool
+	FailoverConfig          *FailoverConfig
+	MetricsInterval         time.Duration
+	EventBufferSize         int
+	DataDir                 string                // Directory for persistent storage (e.g., ~/.config/tunnel/)
+	EnablePersistence       bool                  // Whether to enable metrics history persistence
+	MetricsRetention        time.Duration         // How long to keep metrics history (default: 30 days)
+	EnableCheckpointMonitor bool                  // Whether to enable checkpoint monitoring
+	CheckpointThresholds    *CheckpointThresholds // Checkpoint monitoring thresholds
+	WorkspaceDir            string                // Workspace directory containing .beads (for checkpoint monitoring)
+	AuditLogger             *AuditLogger
 }
 
 // DefaultManagerConfig returns a manager config with sensible defaults
@@ -78,7 +78,7 @@ func DefaultManagerConfig() *ManagerConfig {
 		MetricsInterval:   10 * time.Second,
 		EventBufferSize:   100,
 		DataDir:           dataDir,
-		EnablePersistence: true, // Enable persistence by default
+		EnablePersistence: true,                // Enable persistence by default
 		MetricsRetention:  30 * 24 * time.Hour, // Keep metrics for 30 days by default
 	}
 }
@@ -564,6 +564,14 @@ func (m *DefaultConnectionManager) GetEventPublisher() *EventPublisher {
 	return m.eventPublisher
 }
 
+// GetAuditLogger returns the logger configured for manager subsystems.
+func (m *DefaultConnectionManager) GetAuditLogger() *AuditLogger {
+	if m == nil || m.config == nil {
+		return nil
+	}
+	return m.config.AuditLogger
+}
+
 // GetPersistenceService returns the metrics history persistence service
 func (m *DefaultConnectionManager) GetPersistenceService() *MetricsHistoryService {
 	if m.metricsCollector != nil {
@@ -637,4 +645,3 @@ func (m *DefaultConnectionManager) GetCheckpointAlerts() (map[string]time.Time, 
 	}
 	return m.checkpointMonitor.GetLastAlertTimes(), nil
 }
-

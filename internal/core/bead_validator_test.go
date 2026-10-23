@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,6 +48,8 @@ func TestBeadValidator_ValidateWorkspaceBackend(t *testing.T) {
 	})
 
 	t.Run("Mismatched backend", func(t *testing.T) {
+		tempDir := t.TempDir()
+		validator := NewBeadValidator(&ValidatorConfig{WorkspaceDir: tempDir})
 		// Create .needle.yaml
 		needleConfig := filepath.Join(tempDir, ".needle.yaml")
 		err := os.WriteFile(needleConfig, []byte("bead_cli:\n  backend: bead-rs\n"), 0644)
@@ -222,8 +225,8 @@ func TestBeadValidator_ValidateDatabaseConsistency(t *testing.T) {
 		if result.Passed {
 			t.Errorf("Expected failure when no checkpoint exists")
 		}
-		if result.Fixable {
-			t.Errorf("Expected fixable to be false when no checkpoint")
+		if !result.Fixable {
+			t.Errorf("Expected missing checkpoint to be fixable")
 		}
 	})
 
@@ -287,8 +290,8 @@ func TestBeadValidator_GenerateSummaryReport(t *testing.T) {
 func TestBeadState_EnumValues(t *testing.T) {
 	// Verify enum values are correct
 	tests := []struct {
-		value   BeadState
-		expect  string
+		value  BeadState
+		expect string
 	}{
 		{BeadStateOpen, "open"},
 		{BeadStateInProgress, "in_progress"},
@@ -341,7 +344,7 @@ func TestBead_JSONRoundTrip(t *testing.T) {
 		Status:    BeadStateInProgress,
 		Assignee:  "worker-1",
 		Priority:  2,
-		Revision: 5,
+		Revision:  5,
 		Labels:    []string{"bug", "high-priority"},
 		Blocks:    []string{"bead-2", "bead-3"},
 		BlockedBy: []string{"bead-1"},
