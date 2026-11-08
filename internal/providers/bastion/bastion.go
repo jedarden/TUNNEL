@@ -51,8 +51,17 @@ func (b *BastionProvider) Uninstall() error {
 
 // IsInstalled reports whether the ssh client binary is on PATH
 func (b *BastionProvider) IsInstalled() bool {
-	_, err := exec.LookPath(sshBinary)
-	return err == nil
+	return sshExecutable() != ""
+}
+
+// sshExecutable returns the resolved path of the ssh client this provider
+// runs, or "" when no executable is on PATH.
+func sshExecutable() string {
+	path, err := exec.LookPath(sshBinary)
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 // bastionSpec captures the resolved parameters of one jump-host session.
@@ -72,17 +81,12 @@ func (b *BastionProvider) resolveSpec() (*bastionSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	jumpHost := config.Extra["jumpHost"]
-	if jumpHost == "" {
-		return nil, fmt.Errorf("%w: jump host is required for bastion", providers.ErrInvalidConfig)
-	}
-	if config.RemoteHost == "" {
-		return nil, fmt.Errorf("%w: target host is required for bastion", providers.ErrInvalidConfig)
+	if err := b.ValidateConfig(config); err != nil {
+		return nil, err
 	}
 
 	spec := &bastionSpec{
-		jumpHost:   jumpHost,
+		jumpHost:   config.Extra["jumpHost"],
 		jumpPort:   22,
 		jumpUser:   config.Extra["jumpUser"],
 		target:     config.RemoteHost,
@@ -95,27 +99,16 @@ func (b *BastionProvider) resolveSpec() (*bastionSpec, error) {
 		spec.targetPort = 22
 	}
 	if p := config.Extra["jumpPort"]; p != "" {
-		port, err := strconv.Atoi(p)
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fmt.Errorf("%w: invalid jump host port %q", providers.ErrInvalidConfig, p)
-		}
-		spec.jumpPort = port
+		spec.jumpPort, _ = strconv.Atoi(p)
 	}
 
 	return spec, nil
 }
 
-// Connect opens a persistent ssh session to the target through the jump host
-func (b *BastionProvider) Connect() error {
-	if !b.IsInstalled() {
-		return providers.ErrNotInstalled
-	}
-
-	spec, err := b.resolveSpec()
-	if err != nil {
-		return err
-	}
-
+// buildJumpArgs renders the persistent ssh invocation for one jump-host
+// session. Keeping this separate from Connect makes the exact ProxyJump
+// command easy to test without starting a real SSH session.
+func buildJumpArgs(spec *bastionSpec) []string {
 	jump := spec.jumpHost
 	if spec.jumpUser != "" {
 		jump = spec.jumpUser + "@" + spec.jumpHost
@@ -146,9 +139,21 @@ func (b *BastionProvider) Connect() error {
 	if spec.targetPort != 22 {
 		args = append(args, "-p", strconv.Itoa(spec.targetPort))
 	}
-	args = append(args, target)
+	return append(args, target)
+}
 
-	if err := b.proc.Start(sshBinary, args); err != nil {
+// Connect opens a persistent ssh session to the target through the jump host
+func (b *BastionProvider) Connect() error {
+	if !b.IsInstalled() {
+		return providers.ErrNotInstalled
+	}
+
+	spec, err := b.resolveSpec()
+	if err != nil {
+		return err
+	}
+
+	if err := b.proc.Start(sshBinary, buildJumpArgs(spec)); err != nil {
 		return err
 	}
 
@@ -198,6 +203,12 @@ func (b *BastionProvider) GetConnectionInfo() (*providers.ConnectionInfo, error)
 	info.Extra["jump_port"] = spec.jumpPort
 	info.Extra["target_host"] = spec.target
 	info.Extra["target_port"] = spec.targetPort
+	if spec.jumpUser != "" {
+		info.Extra["jump_user"] = spec.jumpUser
+	}
+	if spec.user != "" {
+		info.Extra["user"] = spec.user
+	}
 	// Keep the legacy summary field for callers that only need the target SSH
 	// port, while the detailed fields above describe the complete route.
 	info.Extra["port"] = spec.targetPort
@@ -205,7 +216,9 @@ func (b *BastionProvider) GetConnectionInfo() (*providers.ConnectionInfo, error)
 	if b.proc.Running() {
 		info.Status = "connected"
 		info.ConnectedAt = b.proc.StartedAt()
+		info.TunnelURL = fmt.Sprintf("%s:%d", spec.target, spec.targetPort)
 		info.Extra["pid"] = b.proc.PID()
+		info.Extra["executable"] = sshExecutable()
 	}
 
 	return info, nil
@@ -213,7 +226,8 @@ func (b *BastionProvider) GetConnectionInfo() (*providers.ConnectionInfo, error)
 
 // HealthCheck reports provider health: not_installed when the ssh client is
 // missing, ready when installed with no session, connected while the
-// jump-host session is alive.
+// jump-host session is alive. Every installed state reports the resolved
+// ssh executable.
 func (b *BastionProvider) HealthCheck() (*providers.HealthStatus, error) {
 	start := time.Now()
 
@@ -226,14 +240,16 @@ func (b *BastionProvider) HealthCheck() (*providers.HealthStatus, error) {
 			Latency:   time.Since(start),
 		}, nil
 	}
+	executable := sshExecutable()
 
 	if !b.proc.Running() {
 		return &providers.HealthStatus{
 			Healthy:   false,
 			Status:    "ready",
-			Message:   "OpenSSH client available; no bastion session active",
+			Message:   fmt.Sprintf("OpenSSH client available at %s; no bastion session active", executable),
 			LastCheck: time.Now(),
 			Latency:   time.Since(start),
+			Metrics:   map[string]interface{}{"executable": executable},
 		}, nil
 	}
 
@@ -245,6 +261,7 @@ func (b *BastionProvider) HealthCheck() (*providers.HealthStatus, error) {
 			Message:   fmt.Sprintf("Config error: %v", err),
 			LastCheck: time.Now(),
 			Latency:   time.Since(start),
+			Metrics:   map[string]interface{}{"executable": executable},
 		}, nil
 	}
 
@@ -255,7 +272,10 @@ func (b *BastionProvider) HealthCheck() (*providers.HealthStatus, error) {
 			spec.target, spec.jumpHost, spec.jumpPort),
 		LastCheck: time.Now(),
 		Latency:   time.Since(start),
-		Metrics:   map[string]interface{}{"pid": b.proc.PID()},
+		Metrics: map[string]interface{}{
+			"pid":        b.proc.PID(),
+			"executable": executable,
+		},
 	}, nil
 }
 
@@ -264,10 +284,35 @@ func (b *BastionProvider) GetLogs(since time.Time) ([]providers.LogEntry, error)
 	return b.proc.Logs(since), nil
 }
 
-// ValidateConfig validates bastion-specific configuration
+// validHostKeyPolicies are the StrictHostKeyChecking values accepted by ssh.
+var validHostKeyPolicies = map[string]bool{
+	"yes":        true,
+	"no":         true,
+	"ask":        true,
+	"accept-new": true,
+}
+
+// ValidateConfig validates bastion-specific configuration: a jump host and a
+// target must be configured, all ports on the routed path must be valid, and
+// the optional authentication and host-key settings must be spellings ssh
+// accepts.
 func (b *BastionProvider) ValidateConfig(config *providers.ProviderConfig) error {
 	if err := b.BaseProvider.ValidateConfig(config); err != nil {
 		return err
+	}
+	if config.Extra["jumpHost"] == "" {
+		return fmt.Errorf("%w: jump host is required for bastion", providers.ErrInvalidConfig)
+	}
+	if config.RemoteHost == "" {
+		return fmt.Errorf("%w: target host is required for bastion", providers.ErrInvalidConfig)
+	}
+	for field, user := range map[string]string{
+		"jumpUser": config.Extra["jumpUser"],
+		"user":     config.Extra["user"],
+	} {
+		if user != "" && strings.TrimSpace(user) == "" {
+			return fmt.Errorf("%w: %s must not be blank", providers.ErrInvalidConfig, field)
+		}
 	}
 	if p := config.Extra["jumpPort"]; p != "" {
 		if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
@@ -276,6 +321,13 @@ func (b *BastionProvider) ValidateConfig(config *providers.ProviderConfig) error
 	}
 	if config.RemotePort < 0 || config.RemotePort > 65535 {
 		return fmt.Errorf("%w: target port %d out of range", providers.ErrInvalidConfig, config.RemotePort)
+	}
+	if key := config.Extra["identityFile"]; key != "" && strings.TrimSpace(key) == "" {
+		return fmt.Errorf("%w: identityFile must name a private key file", providers.ErrInvalidConfig)
+	}
+	if policy := config.Extra["strictHostKeyChecking"]; policy != "" && !validHostKeyPolicies[policy] {
+		return fmt.Errorf("%w: invalid strictHostKeyChecking %q (want yes, no, ask, or accept-new)",
+			providers.ErrInvalidConfig, policy)
 	}
 	return nil
 }
