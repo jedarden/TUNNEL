@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +31,16 @@ type Watcher struct {
 	repoOwner     string // GitHub repo owner (e.g., "jedarden")
 	repoName      string // GitHub repo name (e.g., "tunnel")
 	currentVersion string // Current version (for finding the right release)
+
+	// restartFn, when non-nil, replaces the default exec-based restart so
+	// tests can observe the restart handoff without replacing the process.
+	// Production code leaves it nil.
+	restartFn func() error
+
+	// restartMu serializes checkAndRestart: each debounce timer fires in its
+	// own goroutine, and overlapping invocations would otherwise race on
+	// lastMod and could both pass the modification check and restart twice.
+	restartMu sync.Mutex
 }
 
 // NewWatcher creates a new binary upgrade watcher
@@ -137,6 +148,11 @@ func (w *Watcher) watch() {
 }
 
 func (w *Watcher) checkAndRestart() {
+	// One at a time: debounce timers fire in independent goroutines, and the
+	// second invocation must observe the lastMod the first one recorded.
+	w.restartMu.Lock()
+	defer w.restartMu.Unlock()
+
 	// Verify the binary has actually changed
 	info, err := os.Stat(w.binaryPath)
 	if err != nil {
@@ -423,6 +439,14 @@ func bytesStartsWith(b, prefix []byte) bool {
 func (w *Watcher) restart() {
 	if w.logger != nil {
 		w.logger.Printf("Restarting with new binary...")
+	}
+
+	// Test hook: observe the handoff without replacing the running process.
+	if w.restartFn != nil {
+		if err := w.restartFn(); err != nil && w.logger != nil {
+			w.logger.Printf("Failed to restart: %v", err)
+		}
+		return
 	}
 
 	// Get the current executable path (may have changed if it was a symlink)
