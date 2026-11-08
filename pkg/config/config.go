@@ -132,9 +132,13 @@ func (cmc *CheckpointMonitorConfig) UnmarshalYAML(unmarshal func(interface{}) er
 	return nil
 }
 
-var (
-	defaultConfigPath = filepath.Join(os.Getenv("HOME"), ".config", "tunnel", "config.yaml")
-)
+// defaultConfigPath returns the fallback config file location under the
+// current user's home directory. It resolves at call time rather than
+// package init so a changed $HOME — a test process, a different user — is
+// honored instead of freezing the first process's home into every Load.
+func defaultConfigPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".config", "tunnel", "config.yaml")
+}
 
 // DefaultMetricsPort is the port the optional Prometheus metrics endpoint
 // binds when monitoring.metrics_port is unset (0) in the config file. The
@@ -145,7 +149,7 @@ const DefaultMetricsPort = 9090
 // Load loads configuration from the specified path
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = defaultConfigPath
+		path = defaultConfigPath()
 	}
 
 	// Ensure config directory exists

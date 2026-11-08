@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2033,10 +2032,11 @@ func importGitLabKeys(gitlabUser string) error {
 		color.Cyan("Importing SSH keys from GitLab user: %s", gitlabUser)
 	}
 
-	// GitLab API endpoint for user's SSH keys
-	url := fmt.Sprintf("https://gitlab.com/%s.keys", gitlabUser)
-
-	resp, err := http.Get(url)
+	// ImportFromGitLab validates every key, merges idempotently (re-importing
+	// a known key is not an error), rewrites authorized_keys atomically with
+	// mode 0600, and logs keys_imported audit events — the same path the
+	// GitHub import uses, so both sources behave identically.
+	keys, err := keyManager.ImportFromGitLab(gitlabUser)
 	if err != nil {
 		if jsonOutput {
 			output := map[string]interface{}{
@@ -2046,57 +2046,7 @@ func importGitLabKeys(gitlabUser string) error {
 			}
 			return printJSON(output)
 		}
-		return fmt.Errorf("failed to fetch GitLab keys: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		if jsonOutput {
-			output := map[string]interface{}{
-				"status":      "error",
-				"error":       fmt.Sprintf("GitLab API returned status %d", resp.StatusCode),
-				"gitlab_user": gitlabUser,
-			}
-			return printJSON(output)
-		}
-		return fmt.Errorf("GitLab API returned status %d", resp.StatusCode)
-	}
-
-	var keys []core.SSHPublicKey
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		keyStr := strings.TrimSpace(scanner.Text())
-		if keyStr == "" {
-			continue
-		}
-
-		key, err := keyManager.ValidateKey(keyStr)
-		if err != nil {
-			// Log but continue with other keys
-			fmt.Fprintf(os.Stderr, "Warning: invalid key from GitLab: %v\n", err)
-			continue
-		}
-
-		// Add comment indicating source
-		key.Comment = fmt.Sprintf("gitlab.com/%s", gitlabUser)
-		keys = append(keys, *key)
-
-		// Add to authorized_keys
-		if err := keyManager.AddKey(gitlabUser, *key); err != nil {
-			return fmt.Errorf("failed to add key: %w", err)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		if jsonOutput {
-			output := map[string]interface{}{
-				"status":      "error",
-				"error":       err.Error(),
-				"gitlab_user": gitlabUser,
-			}
-			return printJSON(output)
-		}
-		return fmt.Errorf("failed to read GitLab response: %w", err)
+		return fmt.Errorf("failed to import keys from GitLab: %w", err)
 	}
 
 	if jsonOutput {
