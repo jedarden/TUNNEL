@@ -56,6 +56,9 @@ func TestSmokeBinaryEmbedsAndServes(t *testing.T) {
 
 	// Run it and fetch the frontend over loopback HTTP.
 	smoke := exec.Command(binary, "-addr", "127.0.0.1:0")
+	// The carrier must serve from its embedded filesystem even when launched
+	// outside the repository, where no source-tree assets are available.
+	smoke.Dir = t.TempDir()
 	stdout, err := smoke.StdoutPipe()
 	if err != nil {
 		t.Fatalf("creating stdout pipe: %v", err)

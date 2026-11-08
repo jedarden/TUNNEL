@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,6 +15,10 @@ import (
 // assetRefPattern matches the hashed /assets/... references a Vite build
 // leaves in index.html (module scripts and stylesheets).
 var assetRefPattern = regexp.MustCompile(`(?:src|href)="/assets/([^"]+)"`)
+
+func isRealFrontendIndex(index []byte) bool {
+	return bytes.Contains(index, []byte(`id="root"`)) && bytes.Contains(index, []byte("/assets/"))
+}
 
 func readEmbeddedIndex(t *testing.T) string {
 	t.Helper()
@@ -126,11 +131,11 @@ func TestEmbeddedFrontendMatchesWebDist(t *testing.T) {
 	if err != nil {
 		t.Skipf("web/dist not built (%v); run make build-frontend", err)
 	}
-	if !strings.Contains(string(webIndex), `id="root"`) {
+	if !isRealFrontendIndex(webIndex) {
 		t.Skip("web/dist exists but is not a real Vite build; nothing to compare")
 	}
 	if !HasRealFrontend() {
-		t.Skip("embedded dist is a placeholder; frontend not embedded yet (run make build-frontend)")
+		t.Fatalf("web/dist contains a real Vite build but the embedded dist is a placeholder; run make build-frontend")
 	}
 
 	// Both sides are real builds: every file in web/dist must be embedded
@@ -170,7 +175,7 @@ func TestEmbeddedFrontendMatchesWebDist(t *testing.T) {
 			t.Errorf("web/dist file %s is missing from the embedded dist: %v", rel, err)
 			return nil
 		}
-		if string(got) != string(want) {
+		if !bytes.Equal(got, want) {
 			t.Errorf("embedded %s differs from web/dist (stale embed dir? rerun make build-frontend)", rel)
 		}
 		delete(embedFiles, rel)
