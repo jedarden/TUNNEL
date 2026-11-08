@@ -110,17 +110,10 @@ func (s *SSHForwardProvider) resolveSpec() (*forwardSpec, error) {
 	return spec, nil
 }
 
-// Connect starts the ssh client holding a local port forward open
-func (s *SSHForwardProvider) Connect() error {
-	if !s.IsInstalled() {
-		return providers.ErrNotInstalled
-	}
-
-	spec, err := s.resolveSpec()
-	if err != nil {
-		return err
-	}
-
+// buildForwardArgs renders the ssh invocation for one resolved local
+// forward: a non-executing client (-N) that exits when the forward cannot
+// be established and keeps the connection alive while the remote is silent.
+func buildForwardArgs(spec *forwardSpec) []string {
 	args := []string{
 		"-N",
 		"-o", "ExitOnForwardFailure=yes",
@@ -144,9 +137,23 @@ func (s *SSHForwardProvider) Connect() error {
 	if spec.user != "" {
 		target = spec.user + "@" + spec.remoteHost
 	}
-	args = append(args, "-L", fmt.Sprintf("%s:%d:%s:%d", spec.bindAddress, spec.localPort, spec.remoteHost, spec.remotePort), target)
+	return append(args,
+		"-L", fmt.Sprintf("%s:%d:%s:%d", spec.bindAddress, spec.localPort, spec.remoteHost, spec.remotePort),
+		target)
+}
 
-	if err := s.proc.Start(sshBinary, args); err != nil {
+// Connect starts the ssh client holding a local port forward open
+func (s *SSHForwardProvider) Connect() error {
+	if !s.IsInstalled() {
+		return providers.ErrNotInstalled
+	}
+
+	spec, err := s.resolveSpec()
+	if err != nil {
+		return err
+	}
+
+	if err := s.proc.Start(sshBinary, buildForwardArgs(spec)); err != nil {
 		return err
 	}
 
@@ -299,10 +306,27 @@ func (s *SSHForwardProvider) GetLogs(since time.Time) ([]providers.LogEntry, err
 	return s.proc.Logs(since), nil
 }
 
-// ValidateConfig validates SSH-forward-specific configuration
+// validHostKeyPolicies are the StrictHostKeyChecking values this provider
+// accepts. ssh matches option values case-insensitively, but only these
+// lowercase spellings pass validation so the configured value is always
+// safe to hand to the command line verbatim.
+var validHostKeyPolicies = map[string]bool{
+	"yes":        true,
+	"no":         true,
+	"ask":        true,
+	"accept-new": true,
+}
+
+// ValidateConfig validates SSH-forward-specific configuration: a remote
+// endpoint must be named, ports must be in range, and the optional
+// authentication (identity file) and host-key policy settings must be
+// spellings ssh accepts.
 func (s *SSHForwardProvider) ValidateConfig(config *providers.ProviderConfig) error {
 	if err := s.BaseProvider.ValidateConfig(config); err != nil {
 		return err
+	}
+	if config.RemoteHost == "" {
+		return fmt.Errorf("%w: remote host is required for ssh-forward", providers.ErrInvalidConfig)
 	}
 	for _, port := range []struct {
 		name  string
@@ -319,6 +343,13 @@ func (s *SSHForwardProvider) ValidateConfig(config *providers.ProviderConfig) er
 		if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
 			return fmt.Errorf("%w: invalid SSH server port %q", providers.ErrInvalidConfig, p)
 		}
+	}
+	if key := config.Extra["identityFile"]; key != "" && strings.TrimSpace(key) == "" {
+		return fmt.Errorf("%w: identityFile must name a private key file", providers.ErrInvalidConfig)
+	}
+	if policy := config.Extra["strictHostKeyChecking"]; policy != "" && !validHostKeyPolicies[policy] {
+		return fmt.Errorf("%w: invalid strictHostKeyChecking %q (want yes, no, ask, or accept-new)",
+			providers.ErrInvalidConfig, policy)
 	}
 	return nil
 }
