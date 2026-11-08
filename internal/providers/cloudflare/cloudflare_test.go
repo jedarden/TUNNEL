@@ -164,29 +164,27 @@ func TestHealthCheck(t *testing.T) {
 		t.Errorf("HealthCheck() LastCheck is too old: %v", health.LastCheck)
 	}
 
-	// Status should be one of the expected values
-	validStatuses := map[string]bool{
-		"not_installed": true,
-		"disconnected":  true,
-		"connected":     true,
+	// The result depends on whether cloudflared is installed and running on
+	// the test host, and whether the configured tunnel is active upstream.
+	statuses := map[string]bool{
+		"not_installed":    false,
+		"disconnected":     false,
+		"error":            false,
+		"edge_unreachable": false,
+		"api_error":        false,
+		"tunnel_inactive":  false,
+		"connected":        true,
 	}
-	if !validStatuses[health.Status] {
-		t.Errorf("HealthCheck() status = %q, want one of: not_installed, disconnected, connected", health.Status)
+	wantHealthy, ok := statuses[health.Status]
+	if !ok {
+		t.Errorf("HealthCheck() returned unknown status %q", health.Status)
+	} else if health.Healthy != wantHealthy {
+		t.Errorf("HealthCheck() with status %q: healthy = %t, want %t", health.Status, health.Healthy, wantHealthy)
 	}
 
 	// Message should not be empty
 	if health.Message == "" {
 		t.Error("HealthCheck() message is empty")
-	}
-
-	// If not installed, healthy should be false
-	if health.Status == "not_installed" && health.Healthy {
-		t.Error("HealthCheck() healthy = true when status is not_installed")
-	}
-
-	// If disconnected, healthy should be false
-	if health.Status == "disconnected" && health.Healthy {
-		t.Error("HealthCheck() healthy = true when status is disconnected")
 	}
 }
 
@@ -298,16 +296,16 @@ func isCommandFailedError(err error) bool {
 		return false
 	}
 	return err == providers.ErrCommandFailed ||
-		   err == providers.ErrInvalidResponse ||
-		   containsString(err.Error(), "command execution failed") ||
-		   containsString(err.Error(), "invalid response")
+		err == providers.ErrInvalidResponse ||
+		containsString(err.Error(), "command execution failed") ||
+		containsString(err.Error(), "invalid response")
 }
 
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) &&
-		   (s == substr || len(s) > len(substr) &&
-		   (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-		    len(s) > len(substr)+2 && containsSubstring(s, substr)))
+		(s == substr || len(s) > len(substr) &&
+			(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+				len(s) > len(substr)+2 && containsSubstring(s, substr)))
 }
 
 func containsSubstring(s, substr string) bool {
