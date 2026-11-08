@@ -72,43 +72,38 @@ func (r *ReverseSSHProvider) resolveSpec() (*reverseSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// RemoteHost is accepted as an alias for Extra["relayServer"].
-	relayServer := config.Extra["relayServer"]
-	if relayServer == "" {
-		relayServer = config.RemoteHost
+	if err := r.ValidateConfig(config); err != nil {
+		return nil, err
 	}
-	if relayServer == "" {
-		return nil, fmt.Errorf("%w: relay server is required for reverse-ssh", providers.ErrInvalidConfig)
+
+	// RemoteHost is accepted as an alias for Extra["relayServer"]. The
+	// relayHost spelling is also accepted because it is used by the web UI.
+	relayServer := firstNonEmpty(config.Extra["relayServer"], config.Extra["relayHost"], config.RemoteHost)
+	remotePort := config.RemotePort
+	if p := config.Extra["remotePort"]; p != "" {
+		remotePort, _ = strconv.Atoi(p)
+	}
+	if remotePort == 0 {
+		remotePort = 2222
 	}
 
 	spec := &reverseSpec{
 		relayServer:   relayServer,
 		relayPort:     22,
-		relayUsername: config.Extra["relayUsername"],
-		remotePort:    2222,
-		targetHost:    "localhost",
+		relayUsername: firstNonEmpty(config.Extra["relayUsername"], config.Extra["relayUser"]),
+		remotePort:    remotePort,
+		targetHost:    firstNonEmpty(config.Extra["targetHost"], "localhost"),
 		targetPort:    22,
 		identity:      config.Extra["identityFile"],
 		hostKeys:      config.Extra["strictHostKeyChecking"],
 	}
 
-	if p := config.Extra["relayPort"]; p != "" {
+	if p := firstNonEmpty(config.Extra["relayPort"], config.Extra["port"]); p != "" {
 		port, err := strconv.Atoi(p)
-		if err != nil || port < 1 || port > 65535 {
+		spec.relayPort = port
+		if err != nil {
 			return nil, fmt.Errorf("%w: invalid relay port %q", providers.ErrInvalidConfig, p)
 		}
-		spec.relayPort = port
-	}
-	if p := config.Extra["remotePort"]; p != "" {
-		port, err := strconv.Atoi(p)
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fmt.Errorf("%w: invalid remote port %q", providers.ErrInvalidConfig, p)
-		}
-		spec.remotePort = port
-	}
-	if h := config.Extra["targetHost"]; h != "" {
-		spec.targetHost = h
 	}
 	// LocalPort addresses the local service being exposed; it defaults
 	// to the conventional SSH port of this machine.
@@ -119,17 +114,19 @@ func (r *ReverseSSHProvider) resolveSpec() (*reverseSpec, error) {
 	return spec, nil
 }
 
-// Connect establishes a reverse SSH tunnel to the relay server
-func (r *ReverseSSHProvider) Connect() error {
-	if !r.IsInstalled() {
-		return providers.ErrNotInstalled
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
 	}
+	return ""
+}
 
-	spec, err := r.resolveSpec()
-	if err != nil {
-		return err
-	}
-
+// buildReverseArgs renders the persistent ssh invocation for one reverse
+// forward. Keeping this separate from Connect makes the exact command easy to
+// test without starting a real SSH session.
+func buildReverseArgs(spec *reverseSpec) []string {
 	args := []string{
 		"-N",
 		"-o", "ExitOnForwardFailure=yes",
@@ -152,9 +149,23 @@ func (r *ReverseSSHProvider) Connect() error {
 	if spec.relayUsername != "" {
 		target = spec.relayUsername + "@" + spec.relayServer
 	}
-	args = append(args, "-R", fmt.Sprintf("%d:%s:%d", spec.remotePort, spec.targetHost, spec.targetPort), target)
+	return append(args,
+		"-R", fmt.Sprintf("%d:%s:%d", spec.remotePort, spec.targetHost, spec.targetPort),
+		target)
+}
 
-	if err := r.proc.Start(sshBinary, args); err != nil {
+// Connect establishes a reverse SSH tunnel to the relay server
+func (r *ReverseSSHProvider) Connect() error {
+	if !r.IsInstalled() {
+		return providers.ErrNotInstalled
+	}
+
+	spec, err := r.resolveSpec()
+	if err != nil {
+		return err
+	}
+
+	if err := r.proc.Start(sshBinary, buildReverseArgs(spec)); err != nil {
 		return err
 	}
 
@@ -197,12 +208,18 @@ func (r *ReverseSSHProvider) GetConnectionInfo() (*providers.ConnectionInfo, err
 		return info, nil
 	}
 
+	info.LocalIP = spec.targetHost
 	info.RemoteIP = spec.relayServer
 	info.Extra["type"] = "reverse-ssh-tunnel"
 	info.Extra["relay_server"] = spec.relayServer
 	info.Extra["relay_port"] = spec.relayPort
 	info.Extra["remote_port"] = spec.remotePort
+	info.Extra["target_host"] = spec.targetHost
+	info.Extra["target_port"] = spec.targetPort
 	info.Extra["target"] = fmt.Sprintf("%s:%d", spec.targetHost, spec.targetPort)
+	if spec.relayUsername != "" {
+		info.Extra["relay_username"] = spec.relayUsername
+	}
 
 	if r.proc.Running() {
 		info.Status = "connected"
@@ -287,16 +304,34 @@ func (r *ReverseSSHProvider) GetLogs(since time.Time) ([]providers.LogEntry, err
 	return r.proc.Logs(since), nil
 }
 
-// ValidateConfig validates reverse-ssh-specific configuration
+// validHostKeyPolicies are the StrictHostKeyChecking values accepted by ssh.
+var validHostKeyPolicies = map[string]bool{
+	"yes":        true,
+	"no":         true,
+	"ask":        true,
+	"accept-new": true,
+}
+
+// ValidateConfig validates reverse-ssh-specific configuration: a relay must
+// be configured, all forward ports must be valid, and optional authentication
+// and host-key settings must be safe ssh values.
 func (r *ReverseSSHProvider) ValidateConfig(config *providers.ProviderConfig) error {
 	if err := r.BaseProvider.ValidateConfig(config); err != nil {
 		return err
 	}
+
+	if relay := firstNonEmpty(config.Extra["relayServer"], config.Extra["relayHost"], config.RemoteHost); strings.TrimSpace(relay) == "" {
+		return fmt.Errorf("%w: relay server is required for reverse-ssh", providers.ErrInvalidConfig)
+	}
+	if username := firstNonEmpty(config.Extra["relayUsername"], config.Extra["relayUser"]); username != "" && strings.TrimSpace(username) == "" {
+		return fmt.Errorf("%w: relay username must not be blank", providers.ErrInvalidConfig)
+	}
+
 	for key, value := range map[string]string{
-		"relayPort":  config.Extra["relayPort"],
-		"remotePort": config.Extra["remotePort"],
+		"relayPort":  firstNonEmpty(config.Extra["relayPort"], config.Extra["port"]),
+		"remotePort": firstNonEmpty(config.Extra["remotePort"], strconv.Itoa(config.RemotePort)),
 	} {
-		if value == "" {
+		if value == "" || (key == "remotePort" && value == "0") {
 			continue
 		}
 		if port, err := strconv.Atoi(value); err != nil || port < 1 || port > 65535 {
@@ -305,6 +340,16 @@ func (r *ReverseSSHProvider) ValidateConfig(config *providers.ProviderConfig) er
 	}
 	if config.LocalPort < 0 || config.LocalPort > 65535 {
 		return fmt.Errorf("%w: local port %d out of range", providers.ErrInvalidConfig, config.LocalPort)
+	}
+	if host := config.Extra["targetHost"]; host != "" && strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%w: targetHost must not be blank", providers.ErrInvalidConfig)
+	}
+	if key := config.Extra["identityFile"]; key != "" && strings.TrimSpace(key) == "" {
+		return fmt.Errorf("%w: identityFile must name a private key file", providers.ErrInvalidConfig)
+	}
+	if policy := config.Extra["strictHostKeyChecking"]; policy != "" && !validHostKeyPolicies[policy] {
+		return fmt.Errorf("%w: invalid strictHostKeyChecking %q (want yes, no, ask, or accept-new)",
+			providers.ErrInvalidConfig, policy)
 	}
 	return nil
 }
