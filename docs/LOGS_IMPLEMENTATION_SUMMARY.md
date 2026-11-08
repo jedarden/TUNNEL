@@ -72,7 +72,7 @@ The view integrates with the existing `providers.Provider` interface:
 GetLogs(since time.Time) ([]LogEntry, error)
 ```
 
-All providers (Tailscale, WireGuard, ZeroTier, Cloudflare, ngrok, bore) already implement this method.
+Every registered provider already implements this method — Tailscale, WireGuard, ZeroTier, Cloudflare Tunnel, ngrok, bore, VS Code Tunnels, SSH Port Forward, Reverse SSH, Bastion/Jump Host, and OAuth 2.0 — so the logs view covers the full registry rather than the VPN and tunnel subsets.
 
 ### Registry
 Uses `registry.Registry` to:

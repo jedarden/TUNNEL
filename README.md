@@ -19,7 +19,7 @@ TUNNEL is a Go application that unifies multiple SSH tunnel and VPN providers be
 | Category | Provider | Notes |
 |----------|----------|-------|
 | VPN/Mesh | Tailscale | `tailscale` binary required |
-| VPN/Mesh | WireGuard | `wg-quick` required |
+| VPN/Mesh | WireGuard | `wg` + `wg-quick` required |
 | VPN/Mesh | ZeroTier | `zerotier-cli` required |
 | Tunnel | Cloudflare Tunnel | `cloudflared` required |
 | Tunnel | ngrok | `ngrok` binary required; local API on port 4040 |
@@ -28,6 +28,7 @@ TUNNEL is a Go application that unifies multiple SSH tunnel and VPN providers be
 | SSH | SSH Port Forward | uses system `ssh` |
 | SSH | Reverse SSH | uses system `ssh` |
 | SSH | Bastion/Jump Host | uses system `ssh` |
+| Direct | OAuth 2.0 | built in; no external binary |
 
 TUNNEL detects which provider binaries are already installed and marks the others as unavailable until you install them.
 
@@ -158,7 +159,7 @@ tunnel restart <provider>  # graceful stop + reconnect with state preservation
 
 tunnel auth set-key <provider>  # store an API key/token securely
 
-tunnel list                # list all providers and install status
+tunnel list                # list all providers by category with install status
 
 tunnel keys import --github <username>   # import SSH public keys from GitHub
 tunnel keys add --user <username>        # add a key manually

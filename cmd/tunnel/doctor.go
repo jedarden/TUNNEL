@@ -155,6 +155,34 @@ func checkProviderBinaries() []checkResult {
 		installCmd string
 	}{
 		{
+			name:       "Tailscale",
+			binary:     "tailscale",
+			configKey:  "providers.tailscale.binary_path",
+			required:   false,
+			installCmd: "Visit https://tailscale.com/download or run: curl -fsSL https://tailscale.com/install.sh | sh",
+		},
+		{
+			name:       "WireGuard (wg)",
+			binary:     "wg",
+			configKey:  "providers.wireguard.binary_path",
+			required:   false,
+			installCmd: "Visit https://www.wireguard.com/install/ or run: apt install wireguard",
+		},
+		{
+			name:       "WireGuard (wg-quick)",
+			binary:     "wg-quick",
+			configKey:  "providers.wireguard.wgquick_path",
+			required:   false,
+			installCmd: "Part of the wireguard tools package: Visit https://www.wireguard.com/install/",
+		},
+		{
+			name:       "ZeroTier",
+			binary:     "zerotier-cli",
+			configKey:  "providers.zerotier.binary_path",
+			required:   false,
+			installCmd: "Visit https://www.zerotier.com/download/ or run: curl -s https://install.zerotier.com | sudo bash",
+		},
+		{
 			name:       "Cloudflare Tunnel",
 			binary:     "cloudflared",
 			configKey:  "providers.cloudflared.binary_path",
@@ -169,18 +197,25 @@ func checkProviderBinaries() []checkResult {
 			installCmd: "Visit https://ngrok.com/download or run: snap install ngrok (Linux)",
 		},
 		{
-			name:       "Tailscale",
-			binary:     "tailscale",
-			configKey:  "providers.tailscale.binary_path",
-			required:   false,
-			installCmd: "Visit https://tailscale.com/download or run: curl -fsSL https://tailscale.com/install.sh | sh",
-		},
-		{
 			name:       "bore",
 			binary:     "bore",
 			configKey:  "providers.bore.binary_path",
 			required:   false,
 			installCmd: "Run: cargo install bore-cli (requires Rust)",
+		},
+		{
+			name:       "VS Code Tunnels",
+			binary:     "code",
+			configKey:  "providers.vscode-tunnel.binary_path",
+			required:   false,
+			installCmd: "Visit https://code.visualstudio.com/download or run: snap install code --classic",
+		},
+		{
+			name:       "SSH Client (ssh-forward/reverse-ssh/bastion)",
+			binary:     "ssh",
+			configKey:  "providers.ssh.binary_path",
+			required:   false,
+			installCmd: "Install the OpenSSH client: sudo apt-get install openssh-client",
 		},
 	}
 

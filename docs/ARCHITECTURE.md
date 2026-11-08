@@ -158,12 +158,17 @@ User Request
 │  │  Provider Map                              │    │
 │  │  map[string]Provider                       │    │
 │  │  {                                         │    │
-│  │    "tailscale":  TailscaleProvider        │    │
-│  │    "wireguard":  WireGuardProvider        │    │
-│  │    "zerotier":   ZeroTierProvider         │    │
-│  │    "cloudflare": CloudflareProvider       │    │
-│  │    "ngrok":      NgrokProvider            │    │
-│  │    "bore":       BoreProvider             │    │
+│  │    "tailscale":     TailscaleProvider     │    │
+│  │    "wireguard":     WireGuardProvider     │    │
+│  │    "zerotier":      ZeroTierProvider      │    │
+│  │    "cloudflare":    CloudflareProvider    │    │
+│  │    "ngrok":         NgrokProvider         │    │
+│  │    "bore":          BoreProvider          │    │
+│  │    "vscode-tunnel": VSCodeTunnelProvider  │    │
+│  │    "ssh-forward":   SSHForwardProvider    │    │
+│  │    "reverse-ssh":   ReverseSSHProvider    │    │
+│  │    "bastion":       BastionProvider       │    │
+│  │    "oauth":         OAuthProvider         │    │
 │  │  }                                         │    │
 │  └────────────────────────────────────────────┘    │
 │                                                      │
@@ -196,8 +201,14 @@ User Request
 │  ├── ngrok        - TCP/HTTP tunnels              │
 │  └── bore         - Simple TCP tunnels            │
 │                                                     │
-│  Direct (Future)                                    │
-│  └── SSH          - Direct SSH connections         │
+│  SSH (system ssh / code CLI)                       │
+│  ├── VS Code Tunnel - vscode.dev remote tunnels   │
+│  ├── SSH Forward    - local port forwards         │
+│  ├── Reverse SSH    - inbound tunnels via a relay │
+│  └── Bastion        - jump-host access            │
+│                                                     │
+│  Direct (no external binary)                       │
+│  └── OAuth         - OAuth 2.0 authorization       │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
@@ -352,6 +363,152 @@ User Request
 │  Config:                                │
 │    • LocalPort (default: 22)            │
 │    • RemoteHost (default: bore.pub)     │
+└─────────────────────────────────────────┘
+```
+
+### SSH Providers
+
+All four SSH providers shell out to the system `ssh` client (VS Code Tunnels
+uses the `code` CLI) instead of linking an SSH library, so installation
+detection is a `PATH` lookup.
+
+#### VS Code Tunnels
+```
+┌─────────────────────────────────────────┐
+│       VS Code Tunnel Provider           │
+├─────────────────────────────────────────┤
+│  Binary: code (VS Code CLI)             │
+│  Features:                              │
+│    • Remote tunnels via vscode.dev      │
+│    • Auth via VS Code account           │
+│    • Access from desktop or web         │
+│                                         │
+│  Operations:                            │
+│    Install:  PATH lookup of 'code'     │
+│    Connect:  'code tunnel'             │
+│    Status:   Process + relay check      │
+│    Disconnect: Kill tunnel process      │
+│                                         │
+│  Config (Extra):                        │
+│    • machineName (tunnel name)          │
+│    • provider (relay provider)          │
+│    • acceptLicense (default: true)      │
+└─────────────────────────────────────────┘
+```
+
+#### SSH Port Forward (ssh-forward)
+```
+┌─────────────────────────────────────────┐
+│        SSH Forward Provider             │
+├─────────────────────────────────────────┤
+│  Binary: ssh                            │
+│  Features:                              │
+│    • Local port forwarding (-L)         │
+│    • Keeps forward open with -N         │
+│    • accept-new host key policy by      │
+│      default                            │
+│                                         │
+│  Operations:                            │
+│    Install:  PATH lookup of 'ssh'      │
+│    Connect:  'ssh -N -L ...'           │
+│    Status:   Process check              │
+│    Disconnect: Kill ssh process         │
+│                                         │
+│  Config:                                │
+│    • RemoteHost/RemotePort (required)   │
+│    • LocalPort (default: mirrors        │
+│      remote port)                       │
+│    • Extra: user, port (ssh server      │
+│      port), bindAddress, identityFile,  │
+│      strictHostKeyChecking              │
+└─────────────────────────────────────────┘
+```
+
+#### Reverse SSH (reverse-ssh)
+```
+┌─────────────────────────────────────────┐
+│        Reverse SSH Provider             │
+├─────────────────────────────────────────┤
+│  Binary: ssh                            │
+│  Features:                              │
+│    • Remote forwarding (-R): exposes    │
+│      a local service via a relay host   │
+│    • Reachable behind NAT               │
+│                                         │
+│  Operations:                            │
+│    Install:  PATH lookup of 'ssh'      │
+│    Connect:  'ssh -N -R ...'           │
+│    Status:   Process check              │
+│    Disconnect: Kill ssh process         │
+│                                         │
+│  Config:                                │
+│    • RemoteHost = relay server          │
+│      (or Extra: relayServer)            │
+│    • Extra: relayPort (default 22),     │
+│      remotePort (opened on relay,       │
+│      default 2222), relayUsername,      │
+│      targetHost (default localhost),    │
+│      identityFile,                      │
+│      strictHostKeyChecking              │
+│    • LocalPort = local service port     │
+│      (default: 22)                      │
+└─────────────────────────────────────────┘
+```
+
+#### Bastion / Jump Host (bastion)
+```
+┌─────────────────────────────────────────┐
+│          Bastion Provider               │
+├─────────────────────────────────────────┤
+│  Binary: ssh                            │
+│  Features:                              │
+│    • ProxyJump (-J) through a jump      │
+│      host to a target                   │
+│    • Persistent -N session              │
+│                                         │
+│  Operations:                            │
+│    Install:  PATH lookup of 'ssh'      │
+│    Connect:  'ssh -N -J ...'           │
+│    Status:   Process check              │
+│    Disconnect: Kill ssh process         │
+│                                         │
+│  Config:                                │
+│    • Extra: jumpHost (required),        │
+│      jumpPort (default 22), jumpUser    │
+│    • RemoteHost/RemotePort = target     │
+│      (default port 22)                  │
+│    • Extra: user, identityFile,         │
+│      strictHostKeyChecking              │
+└─────────────────────────────────────────┘
+```
+
+### Direct Providers
+
+#### OAuth
+```
+┌─────────────────────────────────────────┐
+│          OAuth Provider                 │
+├─────────────────────────────────────────┤
+│  Binary: none (always installed)        │
+│  Features:                              │
+│    • OAuth 2.0 authorization code flow  │
+│    • Local callback server catches the  │
+│      provider redirect                  │
+│    • Tokens stored in the credential    │
+│      store                              │
+│                                         │
+│  Operations:                            │
+│    Install:  no-op                      │
+│    Connect:  open auth URL, wait for    │
+│              callback (5 min timeout)   │
+│    Status:   Token presence in store    │
+│    Disconnect: Shutdown callback server │
+│                                         │
+│  Config (Extra):                        │
+│    • provider (github, google, ...)     │
+│    • client_id / client_secret          │
+│    • redirect_uri (required)            │
+│    • scopes (optional)                  │
 └─────────────────────────────────────────┘
 ```
 

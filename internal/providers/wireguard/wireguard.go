@@ -43,11 +43,18 @@ func (w *WireGuardProvider) Uninstall() error {
 	return fmt.Errorf("please uninstall WireGuard manually using your package manager")
 }
 
-// IsInstalled checks if WireGuard is installed
+// IsInstalled checks if WireGuard is installed. Both tools are required:
+// Connect and Disconnect drive the interface through wg-quick, while status,
+// transfer statistics and log retrieval come from wg and the wg-quick@*
+// systemd units. Detecting only one would let a half-installed setup pass
+// here and fail later in Connect with a command error.
 func (w *WireGuardProvider) IsInstalled() bool {
-	cmd := exec.Command("wg", "version")
-	err := cmd.Run()
-	return err == nil
+	for _, binary := range []string{"wg", "wg-quick"} {
+		if _, err := exec.LookPath(binary); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // Connect establishes a WireGuard connection

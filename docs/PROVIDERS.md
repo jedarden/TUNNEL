@@ -37,11 +37,12 @@ type Provider interface {
 
 ### Categories
 
-Providers are categorized into three types:
+Providers are categorized into four types:
 
 - **VPN**: Full mesh or peer-to-peer VPN solutions (Tailscale, WireGuard, ZeroTier)
 - **Tunnel**: Port forwarding and tunnel services (Cloudflare Tunnel, ngrok, bore)
-- **Direct**: Direct SSH connections (future implementation)
+- **SSH**: Access over the system `ssh` client or the VS Code CLI (VS Code Tunnels, SSH Port Forward, Reverse SSH, Bastion)
+- **Direct**: In-process providers with no external binary (OAuth 2.0)
 
 ## Available Providers
 
@@ -234,7 +235,7 @@ provider.Connect()
 
 #### VS Code Tunnels
 
-**Location**: `/home/coding/TUNNEL/internal/providers/vscodetunnel/vscodetunnel.go`
+**Location**: `internal/providers/vscodetunnel/vscodetunnel.go`
 
 **Features**:
 - Remote development through VS Code
@@ -287,11 +288,126 @@ if health.Healthy {
 - Requires VS Code CLI (`code` command) to be installed
 - Authentication handled by VS Code's built-in account system
 - Tunnel name defaults to hostname, can be customized via `machineName` config
-- Automatically routes through VS Code's relay service (tunnel.antlr.vscode.dev:443)
+- Automatically routes through VS Code's relay service (`global.rel.tunnels.api.visualstudio.com:443`)
+
+#### SSH Port Forward (ssh-forward)
+
+**Location**: `internal/providers/sshforward/sshforward.go`
+
+**Features**:
+- Local port forwarding (`ssh -L`) to a remote service
+- Holds the forward open with a persistent `ssh -N` process
+- `accept-new` host key policy by default (trusts first contact, rejects changed keys)
+
+**Configuration**:
+```go
+config := &ProviderConfig{
+    Name:       "ssh-forward",
+    RemoteHost: "db.internal.example.com",
+    RemotePort: 5432,
+    LocalPort:  15432, // defaults to mirroring RemotePort
+    Extra: map[string]string{
+        "user":                  "deploy",   // optional SSH user
+        "port":                  "22",       // optional SSH server port
+        "bindAddress":           "127.0.0.1",
+        "identityFile":          "~/.ssh/id_ed25519",
+        "strictHostKeyChecking": "yes",
+    },
+}
+```
+
+**Notes**:
+- Requires the `ssh` client in PATH
+- `RemoteHost`/`RemotePort` are required
+
+#### Reverse SSH (reverse-ssh)
+
+**Location**: `internal/providers/reversessh/reversessh.go`
+
+**Features**:
+- Remote forwarding (`ssh -R`): exposes a local service on a relay host
+- Makes a machine reachable from outside despite NAT
+
+**Configuration**:
+```go
+config := &ProviderConfig{
+    Name:       "reverse-ssh",
+    RemoteHost: "relay.example.com", // or Extra["relayServer"]
+    LocalPort:  22,                  // local service to expose (default 22)
+    Extra: map[string]string{
+        "relayPort":     "22",       // SSH port on the relay
+        "remotePort":    "2222",     // port opened on the relay (default 2222)
+        "relayUsername": "tunnel",
+        "targetHost":    "localhost",
+        "identityFile":  "~/.ssh/id_ed25519",
+    },
+}
+```
+
+**Notes**:
+- Requires the `ssh` client in PATH
+- A relay server is required (`RemoteHost` or `Extra["relayServer"]`)
+
+#### Bastion / Jump Host (bastion)
+
+**Location**: `internal/providers/bastion/bastion.go`
+
+**Features**:
+- ProxyJump (`ssh -J`) through a jump host to a target host
+- Persistent `ssh -N` session
+
+**Configuration**:
+```go
+config := &ProviderConfig{
+    Name:       "bastion",
+    RemoteHost: "target.internal.example.com",
+    RemotePort: 22,
+    Extra: map[string]string{
+        "jumpHost": "bastion.example.com", // required
+        "jumpPort": "22",
+        "jumpUser": "ops",
+        "user":     "deploy",
+        "identityFile": "~/.ssh/id_ed25519",
+    },
+}
+```
+
+**Notes**:
+- Requires the `ssh` client in PATH
+- Both `Extra["jumpHost"]` and `RemoteHost` are required
+
+### Direct Providers
+
+#### OAuth 2.0 (oauth)
+
+**Location**: `internal/providers/oauth/oauth.go`
+
+**Features**:
+- OAuth 2.0 authorization code flow
+- Local callback server catches the provider redirect
+- Tokens stored in the credential store
+
+**Configuration**:
+```go
+config := &ProviderConfig{
+    Name: "oauth",
+    Extra: map[string]string{
+        "provider":     "github",                    // github, google, ...
+        "client_id":    "...",                       // required
+        "client_secret": "...",
+        "redirect_uri": "http://localhost:8080/callback", // required
+        "scopes":       "read:user",                 // optional
+    },
+}
+```
+
+**Notes**:
+- No external binary — always reported as installed
+- Authorization must complete within 5 minutes of starting the flow
 
 ## Provider Registry
 
-The provider registry manages all available providers and is located at `/workspaces/ardenone-cluster/tunnel/internal/registry/registry.go`.
+The provider registry manages all available providers and is located at `internal/registry/registry.go`.
 
 ### Usage Examples
 

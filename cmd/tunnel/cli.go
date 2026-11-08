@@ -1223,29 +1223,36 @@ func listMethods() error {
 	color.Cyan("=== Available Tunnel Providers ===")
 	fmt.Println()
 
-	// Group by category
-	vpnProviders := []registry.ProviderInfo{}
-	tunnelProviders := []registry.ProviderInfo{}
-
-	for _, info := range providerInfo {
-		if info.Category == "vpn" {
-			vpnProviders = append(vpnProviders, info)
-		} else if info.Category == "tunnel" {
-			tunnelProviders = append(tunnelProviders, info)
-		}
+	// Group by category, preserving VPN -> Tunnel -> SSH -> Direct order so
+	// every registered provider appears exactly once. SSH and Direct
+	// providers are real backends too (the SSH family shells out to the
+	// system ssh client; OAuth is in-process) and were previously fetched
+	// here but silently dropped from the output.
+	sections := []struct {
+		category string
+		title    string
+	}{
+		{"vpn", "VPN Providers:"},
+		{"tunnel", "Tunnel Providers:"},
+		{"ssh", "SSH Providers:"},
+		{"direct", "Direct Providers:"},
 	}
 
-	if len(vpnProviders) > 0 {
-		color.Cyan("VPN Providers:")
-		for _, info := range vpnProviders {
-			displayProviderInfo(info)
+	for i, section := range sections {
+		members := []registry.ProviderInfo{}
+		for _, info := range providerInfo {
+			if string(info.Category) == section.category {
+				members = append(members, info)
+			}
 		}
-		fmt.Println()
-	}
-
-	if len(tunnelProviders) > 0 {
-		color.Cyan("Tunnel Providers:")
-		for _, info := range tunnelProviders {
+		if len(members) == 0 {
+			continue
+		}
+		if i > 0 {
+			fmt.Println()
+		}
+		color.Cyan(section.title)
+		for _, info := range members {
 			displayProviderInfo(info)
 		}
 	}
