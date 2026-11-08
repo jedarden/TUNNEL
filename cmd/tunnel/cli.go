@@ -1815,14 +1815,10 @@ func addKey(user string) error {
 		fmt.Println("Paste your SSH public key (press Enter when done):")
 	}
 
-	// Read the key from stdin
-	reader := bufio.NewReader(os.Stdin)
-	keyStr, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read key: %w", err)
+	keyStr, err := readSingleKeyLine(os.Stdin)
+	if err != nil {
+		return err
 	}
-
-	keyStr = strings.TrimSpace(keyStr)
 	if keyStr == "" {
 		return fmt.Errorf("key cannot be empty")
 	}
@@ -1864,6 +1860,42 @@ func addKey(user string) error {
 	}
 
 	return nil
+}
+
+// readSingleKeyLine accepts one authorized-key line. For redirected input it
+// reads through EOF so extra pasted lines cannot be silently ignored. On a
+// terminal it only inspects bytes already buffered after the first line, so
+// the interactive prompt can still finish when the user presses Enter.
+func readSingleKeyLine(input *os.File) (string, error) {
+	reader := bufio.NewReader(input)
+	keyLine, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("failed to read key: %w", err)
+	}
+
+	info, statErr := input.Stat()
+	if statErr != nil {
+		return "", fmt.Errorf("failed to inspect key input: %w", statErr)
+	}
+
+	var trailing []byte
+	if info.Mode()&os.ModeCharDevice == 0 {
+		trailing, err = io.ReadAll(reader)
+		if err != nil {
+			return "", fmt.Errorf("failed to read key input: %w", err)
+		}
+	} else if buffered := reader.Buffered(); buffered > 0 {
+		trailing, err = reader.Peek(buffered)
+		if err != nil {
+			return "", fmt.Errorf("failed to inspect key input: %w", err)
+		}
+	}
+
+	if strings.TrimSpace(string(trailing)) != "" {
+		return "", fmt.Errorf("expected exactly one SSH public key line")
+	}
+
+	return strings.TrimSpace(keyLine), nil
 }
 
 func rotateKey(user, keyID string) error {

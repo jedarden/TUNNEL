@@ -205,18 +205,56 @@ func TestKeysManualAddUpdatesAuthorizedKeys(t *testing.T) {
 	}
 }
 
+func TestKeysCommandsCompleteAddListRevokeWorkflow(t *testing.T) {
+	keyMgr, path := installTestKeyManager(t, nil)
+	withJSONOutput(t, false)
+	pipeStdin(t, testKeyAliceLaptop+"\n")
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		rootCmd.SetArgs(args)
+		var commandErr error
+		output := captureStdout(t, func() {
+			_, commandErr = rootCmd.ExecuteC()
+		})
+		return output, commandErr
+	}
+
+	if _, err := run("keys", "add", "alice"); err != nil {
+		t.Fatalf("keys add: %v", err)
+	}
+
+	fingerprint, err := keyMgr.GetFingerprint(testKeyAliceLaptop)
+	if err != nil {
+		t.Fatalf("GetFingerprint: %v", err)
+	}
+	listOutput, err := run("keys", "list", "alice")
+	if err != nil {
+		t.Fatalf("keys list: %v", err)
+	}
+	if !strings.Contains(listOutput, fingerprint) {
+		t.Errorf("keys list output %q does not include fingerprint %s", listOutput, fingerprint)
+	}
+
+	if _, err := run("keys", "revoke", fingerprint, "--user", "alice"); err != nil {
+		t.Fatalf("keys revoke: %v", err)
+	}
+	if lines := authorizedKeysLines(t, path); len(lines) != 0 {
+		t.Errorf("keys revoke left authorized key lines: %q", lines)
+	}
+}
+
 func TestKeysManualAddRejectsInvalidInput(t *testing.T) {
 	_, path := installTestKeyManager(t, nil)
 
-	// addKey reads exactly one line, so a multi-key paste past that line
-	// never reaches the validator here; the parser-level rejection of
-	// multi-key input is covered by core's TestValidateKeyRejectsMultipleKeys.
 	cases := []struct {
 		name  string
 		input string
 	}{
 		{"empty", "\n"},
 		{"not a key", "definitely not an OpenSSH public key\n"},
+		{"multiple keys", testKeyAliceLaptop + "\n" + testKeyAlicePhone + "\n"},
 	}
 
 	for _, tc := range cases {
