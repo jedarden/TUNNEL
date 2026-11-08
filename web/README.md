@@ -71,14 +71,13 @@ Create a `.env.local` file for local development:
 
 ```env
 VITE_API_BASE_URL=/api
-VITE_WS_URL=/ws
 ```
 
 ### API Proxy
 
 The Vite dev server proxies API requests to the Go backend:
 - `/api/*` → `http://localhost:8080/api/*`
-- `/ws` → `ws://localhost:8080/ws`
+- `/api/ws` → `ws://localhost:8080/api/ws` (WebSocket; the `/api` proxy entry has `ws: true`)
 
 ## Features
 

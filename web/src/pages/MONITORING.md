@@ -129,7 +129,7 @@ Response: { data: ConnectionEvent[] }
 
 ### WebSocket
 ```typescript
-ws://localhost:PORT/ws
+ws://localhost:PORT/api/ws
 
 Messages:
 - { type: 'system.metrics', data: { metrics: MetricsSnapshot }, timestamp: string }
