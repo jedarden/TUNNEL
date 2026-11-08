@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -146,7 +147,7 @@ func GetAvailablePort(startPort int) (int, error) {
 
 // TestConnectivity tests connectivity to a host and port
 func TestConnectivity(host string, port int, timeout time.Duration) error {
-	address := fmt.Sprintf("%s:%d", host, port)
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", address, err)

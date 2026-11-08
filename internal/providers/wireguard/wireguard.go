@@ -236,22 +236,18 @@ func (w *WireGuardProvider) HealthCheck() (*providers.HealthStatus, error) {
 		if err != nil {
 			// UDP might not establish connection immediately, try TCP test instead
 			// as a fallback for connectivity verification
-			parts := strings.Split(connInfo.RemoteIP, ":")
-			if len(parts) == 2 {
-				testAddr := fmt.Sprintf("%s:%s", parts[0], parts[1])
-				conn, err := net.DialTimeout("tcp", testAddr, timeout)
-				if err != nil {
-					return &providers.HealthStatus{
-						Healthy:   false,
-						Status:    "endpoint_unreachable",
-						Message:   fmt.Sprintf("WireGuard endpoint %s is not reachable: %v", connInfo.RemoteIP, err),
-						LastCheck: time.Now(),
-						Latency:   time.Since(start),
-						Metrics:   health.Metrics,
-					}, nil
-				}
-				conn.Close()
+			conn, err := net.DialTimeout("tcp", connInfo.RemoteIP, timeout)
+			if err != nil {
+				return &providers.HealthStatus{
+					Healthy:   false,
+					Status:    "endpoint_unreachable",
+					Message:   fmt.Sprintf("WireGuard endpoint %s is not reachable: %v", connInfo.RemoteIP, err),
+					LastCheck: time.Now(),
+					Latency:   time.Since(start),
+					Metrics:   health.Metrics,
+				}, nil
 			}
+			conn.Close()
 		} else {
 			conn.Close()
 		}
