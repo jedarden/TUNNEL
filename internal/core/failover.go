@@ -363,10 +363,10 @@ func (fm *FailoverManager) triggerFailover(failedPrimaryID string) {
 	// Persist failover event
 	if fm.persistence != nil {
 		details := map[string]interface{}{
-			"old_primary":  failedPrimaryID,
-			"new_primary":  backup.ID,
-			"trigger":      "health_check_failure",
-			"timestamp":    time.Now().Unix(),
+			"old_primary": failedPrimaryID,
+			"new_primary": backup.ID,
+			"trigger":     "health_check_failure",
+			"timestamp":   time.Now().Unix(),
 		}
 		_ = fm.persistence.RecordFailoverEvent("failover", backup.ID, failedPrimaryID, backup.ID,
 			fmt.Sprintf("Primary connection failed, switched to %s", backup.ID), details)
@@ -382,7 +382,11 @@ func (fm *FailoverManager) checkForBetterPrimary(currentPrimaryID string) {
 
 	currentPriority := currentPrimary.GetPriority()
 
-	// Find a healthy connection with higher priority (lower number)
+	// Find the best healthy connection with higher priority (lower number).
+	// Candidates are compared in failover preference order so the recovery
+	// target is deterministic regardless of Go's randomized map iteration
+	// order — with several qualifying candidates the same one must always win.
+	var recovered *Connection
 	for _, conn := range fm.connections {
 		if conn.ID == currentPrimaryID {
 			continue
@@ -397,23 +401,31 @@ func (fm *FailoverManager) checkForBetterPrimary(currentPrimaryID string) {
 		healthy := status.IsHealthy
 		status.mu.RUnlock()
 
-		if healthy && conn.GetPriority() < currentPriority {
-			// Found a better connection, switch to it
-			currentPrimary.SetPrimaryConnection(false)
-			conn.SetPrimaryConnection(true)
-			fm.primaryConnID = conn.ID
-
-			if fm.eventPublisher != nil {
-				event := NewEvent(EventPrimaryChange, conn.ID,
-					map[string]string{
-						"old_primary": currentPrimaryID,
-						"new_primary": conn.ID,
-					},
-					fmt.Sprintf("Recovered to higher priority connection: %s", conn.ID))
-				fm.eventPublisher.Publish(event)
-			}
-			return
+		if !healthy || conn.GetPriority() >= currentPriority {
+			continue
 		}
+
+		if recovered == nil || betterFailoverCandidate(conn, recovered) {
+			recovered = conn
+		}
+	}
+
+	if recovered == nil {
+		return
+	}
+
+	currentPrimary.SetPrimaryConnection(false)
+	recovered.SetPrimaryConnection(true)
+	fm.primaryConnID = recovered.ID
+
+	if fm.eventPublisher != nil {
+		event := NewEvent(EventPrimaryChange, recovered.ID,
+			map[string]string{
+				"old_primary": currentPrimaryID,
+				"new_primary": recovered.ID,
+			},
+			fmt.Sprintf("Recovered to higher priority connection: %s", recovered.ID))
+		fm.eventPublisher.Publish(event)
 	}
 }
 
@@ -445,12 +457,26 @@ func (fm *FailoverManager) findBestBackup(excludeID string) *Connection {
 		return nil
 	}
 
-	// Sort by priority (lower number = higher priority)
+	// Sort by failover preference: lower priority number = higher priority.
+	// Priority ties break by connection ID so the selection is deterministic
+	// regardless of Go's randomized map iteration order — same-priority
+	// failover must always promote the same backup.
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].GetPriority() < candidates[j].GetPriority()
+		return betterFailoverCandidate(candidates[i], candidates[j])
 	})
 
 	return candidates[0]
+}
+
+// betterFailoverCandidate reports whether connection a is preferred over b
+// for promotion: lower priority wins, and priority ties break by connection
+// ID so failover decisions stay deterministic when map iteration order varies.
+func betterFailoverCandidate(a, b *Connection) bool {
+	pa, pb := a.GetPriority(), b.GetPriority()
+	if pa != pb {
+		return pa < pb
+	}
+	return a.ID < b.ID
 }
 
 // selectNewPrimary selects a new primary connection
