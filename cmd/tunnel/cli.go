@@ -1863,9 +1863,8 @@ func addKey(user string) error {
 }
 
 // readSingleKeyLine accepts one authorized-key line. For redirected input it
-// reads through EOF so extra pasted lines cannot be silently ignored. On a
-// terminal it only inspects bytes already buffered after the first line, so
-// the interactive prompt can still finish when the user presses Enter.
+// reads through EOF. On a terminal it checks for pending bytes after the first
+// line so a multi-line paste cannot silently add only its first key.
 func readSingleKeyLine(input *os.File) (string, error) {
 	reader := bufio.NewReader(input)
 	keyLine, err := reader.ReadString('\n')
@@ -1884,8 +1883,8 @@ func readSingleKeyLine(input *os.File) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to read key input: %w", err)
 		}
-	} else if buffered := reader.Buffered(); buffered > 0 {
-		trailing, err = reader.Peek(buffered)
+	} else {
+		trailing, err = readReadyTerminalInput(input, reader)
 		if err != nil {
 			return "", fmt.Errorf("failed to inspect key input: %w", err)
 		}
