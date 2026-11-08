@@ -380,8 +380,8 @@ func (e *EnvStore) Set(service, key string, value []byte) error {
 
 func (e *EnvStore) Get(service, key string) ([]byte, error) {
 	envKey := e.makeEnvKey(service, key)
-	encoded := os.Getenv(envKey)
-	if encoded == "" {
+	encoded, ok := os.LookupEnv(envKey)
+	if !ok {
 		return nil, ErrCredentialNotFound
 	}
 
